@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Peindre les parties du corps</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #1a1f2e;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; width: 100% !important; height: 100% !important; touch-action: none; }
+
+  #loading {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: #1a1f2e; z-index: 20; transition: opacity 0.5s ease;
+  }
+  #loading.hidden { opacity: 0; pointer-events: none; }
+  .spinner {
+    width: 42px; height: 42px; border: 3px solid rgba(255,255,255,0.35);
+    border-top-color: #fff; border-radius: 50%; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading-text { color: #fff; font-size: 14px; }
+
+  #panel {
+    position: fixed; top: 12px; left: 12px; width: 260px; max-height: calc(100% - 24px);
+    background: rgba(15, 20, 32, 0.88); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.12); border-radius: 14px;
+    color: #eaf0ff; padding: 14px; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 12px; z-index: 10;
+    overflow-y: auto;
+  }
+  #panel h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  #panel p.hint { font-size: 11.5px; opacity: 0.7; margin: 0; line-height: 1.4; }
+
+  .partBtn {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    background: rgba(255,255,255,0.05); border: 2px solid transparent; border-radius: 8px;
+    padding: 8px 10px; color: #eaf0ff; font-size: 12.5px; cursor: pointer; text-align: left;
+  }
+  .partBtn.active { border-color: #fff; background: rgba(255,255,255,0.12); }
+  .partBtn .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+
+  .row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .row input[type="range"] { flex: 1; }
+
+  .btnRow { display: flex; gap: 8px; }
+  button.action {
+    flex: 1; border: none; border-radius: 8px; padding: 9px 8px; font-size: 12px;
+    font-weight: 600; cursor: pointer; background: rgba(255,255,255,0.08); color: #eaf0ff;
+  }
+  button.action:hover { background: rgba(255,255,255,0.15); }
+  #paintToggle { background: #3f5fd8; }
+  #paintToggle.on { background: #2fae6a; }
+  #exportBtn { background: #3f5fd8; }
+  #exportBtn.copied { background: #2fae6a; }
+
+  #jsonOut {
+    width: 100%; box-sizing: border-box; height: 90px; resize: vertical;
+    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px; color: #b9d4ff; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 10px; padding: 8px; display: none;
+  }
+
+  #hint {
+    position: fixed; bottom: max(16px, env(safe-area-inset-bottom)); left: 50%;
+    transform: translateX(-50%); color: rgba(255,255,255,0.85); font-size: 12px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.3); pointer-events: none; text-align: center; z-index: 5;
+    background: rgba(0,0,0,0.35); padding: 6px 14px; border-radius: 20px;
+  }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <div id="loading-text">Chargement du personnage…</div>
+  </div>
+
+  <div id="panel">
+    <div>
+      <h1>Peindre les parties du corps</h1>
+      <p class="hint">Le perso démarre déjà colorié automatiquement. Choisis une partie ci-dessous, active "Peindre", puis glisse sur le mesh pour repeindre exactement où tu veux que chaque partie commence/s'arrête. "Tourner" pour orbiter sans peindre.</p>
+    </div>
+
+    <div id="partButtons"></div>
+
+    <div class="row">
+      <span>Taille pinceau</span>
+      <input type="range" id="brushSize" min="0.01" max="0.25" step="0.005" value="0.05" />
+    </div>
+
+    <button class="action" id="paintToggle">🖌️ Peindre (OFF — orbite active)</button>
+
+    <div class="btnRow">
+      <button class="action" id="exportBtn">Exporter le JSON</button>
+      <button class="action" id="resetBtn">Réinitialiser (auto)</button>
+    </div>
+    <textarea id="jsonOut" readonly></textarea>
+  </div>
+
+  <div id="hint">Glisse le fond pour tourner / zoomer</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+    const BACKGROUND_COLOR = 0x1a1f2e;
+    const MODEL_URL = "./assets/character.fbx";
+    const UP_AXIS = new THREE.Vector3(0, 0, 1);
+
+    // -----------------------------------------------------------
+    // Parties du corps : mêmes couleurs que les visus de vérification
+    // -----------------------------------------------------------
+    const PARTS = [
+      { id: 0, name: "Tête (+ oreilles)", color: 0xffe045 },
+      { id: 1, name: "Bras gauche", color: 0xff45c7 },
+      { id: 2, name: "Bras droit", color: 0x9dff45 },
+      { id: 3, name: "Jambe gauche", color: 0x45c7ff },
+      { id: 4, name: "Jambe droite", color: 0xff7a45 },
+      { id: 5, name: "Statique (ne bouge pas)", color: 0x555555 },
+    ];
+    let activePart = 0;
+
+    // -----------------------------------------------------------
+    // Points calibrés (repris de la calibration précédente) : servent
+    // uniquement à calculer une attribution AUTOMATIQUE de départ, que
+    // tu peux ensuite repeindre par-dessus.
+    // -----------------------------------------------------------
+    const CALIBRATED_POINTS = {
+      genou_gauche: new THREE.Vector3(0.11563, -0.06482, 0.38684),
+      genou_droit: new THREE.Vector3(-0.10082, -0.06814, 0.40198),
+      hanche_gauche: new THREE.Vector3(0.08939, -0.07064, 0.51424),
+      hanche_droite: new THREE.Vector3(-0.08397, -0.07663, 0.52264),
+      epaule_gauche: new THREE.Vector3(0.10254, -0.00732, 0.77457),
+      epaule_droite: new THREE.Vector3(-0.09953, -0.00956, 0.77488),
+      coude_gauche: new THREE.Vector3(0.31632, 0.00123, 0.75121),
+      coude_droit: new THREE.Vector3(-0.35283, 0.00026, 0.75139),
+      cou: new THREE.Vector3(0.02064, -0.05691, 0.81782),
+    };
+    // { partId, parentKey, childKey|null, sMin, radius }
+    const AUTO_CHAINS = [
+      { partId: 3, parent: "hanche_gauche", child: "genou_gauche", sMin: -0.05, radius: 0.42 },
+      { partId: 4, parent: "hanche_droite", child: "genou_droit", sMin: -0.05, radius: 0.42 },
+      { partId: 1, parent: "epaule_gauche", child: "coude_gauche", sMin: -0.05, radius: 0.45 },
+      { partId: 2, parent: "epaule_droite", child: "coude_droit", sMin: -0.05, radius: 0.45 },
+      { partId: 0, parent: "cou", child: null, sMin: -0.14, radius: 0.90 },
+    ];
+
+    function nearestVertexPos(posAttr, point) {
+      let best = -1, bestDist = Infinity;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        const d = v.distanceToSquared(point);
+        if (d < bestDist) { bestDist = d; best = i; }
+      }
+      return v.fromBufferAttribute(posAttr, best).clone();
+    }
+
+    function findFarthestAlong(posAttr, parentPos, dirGuess, radius, sMin) {
+      const v = new THREE.Vector3(), rel = new THREE.Vector3(), perp = new THREE.Vector3();
+      let best = null, bestS = -Infinity;
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        rel.copy(v).sub(parentPos);
+        const s = rel.dot(dirGuess);
+        if (s <= sMin || s <= bestS) continue;
+        perp.copy(rel).addScaledVector(dirGuess, -s);
+        if (perp.length() < radius) { bestS = s; best = v.clone(); }
+      }
+      return best;
+    }
+
+    function computeAutoAssignment(posAttr) {
+      const count = posAttr.count;
+      const snapped = {};
+      for (const key in CALIBRATED_POINTS) snapped[key] = nearestVertexPos(posAttr, CALIBRATED_POINTS[key]);
+
+      const chains = AUTO_CHAINS.map((def) => {
+        const parentPos = snapped[def.parent];
+        let dir;
+        if (def.child) {
+          const childPos = snapped[def.child];
+          const dir0 = childPos.clone().sub(parentPos).normalize();
+          const tip = findFarthestAlong(posAttr, parentPos, dir0, def.radius, def.sMin)
+            || parentPos.clone().addScaledVector(dir0, 0.1);
+          dir = tip.clone().sub(parentPos).normalize();
+        } else {
+          dir = UP_AXIS.clone();
+        }
+        return { partId: def.partId, parentPos, dir, sMin: def.sMin, radius: def.radius };
+      });
+
+      const assign = new Int8Array(count).fill(5); // 5 = statique par défaut
+      const v = new THREE.Vector3(), rel = new THREE.Vector3(), perp = new THREE.Vector3();
+      for (let i = 0; i < count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        let bestPart = -1, bestD = Infinity;
+        for (const c of chains) {
+          rel.copy(v).sub(c.parentPos);
+          const s = rel.dot(c.dir);
+          if (s < c.sMin) continue;
+          perp.copy(rel).addScaledVector(c.dir, -s);
+          const d = perp.length();
+          if (d > c.radius || d >= bestD) continue;
+          bestD = d; bestPart = c.partId;
+        }
+        if (bestPart !== -1) assign[i] = bestPart;
+      }
+      return assign;
+    }
+
+    // -----------------------------------------------------------
+    // UI : boutons de sélection de partie
+    // -----------------------------------------------------------
+    const partButtonsEl = document.getElementById("partButtons");
+    PARTS.forEach((p) => {
+      const btn = document.createElement("button");
+      btn.className = "partBtn" + (p.id === activePart ? " active" : "");
+      btn.innerHTML = `<span class="dot" style="background:#${p.color.toString(16).padStart(6,"0")}"></span>${p.name}`;
+      btn.addEventListener("click", () => {
+        activePart = p.id;
+        document.querySelectorAll(".partBtn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+      partButtonsEl.appendChild(btn);
+    });
+
+    const brushSizeEl = document.getElementById("brushSize");
+    const paintToggle = document.getElementById("paintToggle");
+    const exportBtn = document.getElementById("exportBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const jsonOut = document.getElementById("jsonOut");
+
+    let paintMode = false;
+    paintToggle.addEventListener("click", () => {
+      paintMode = !paintMode;
+      paintToggle.classList.toggle("on", paintMode);
+      paintToggle.textContent = paintMode ? "🖌️ Peindre (ON — glisse sur le perso)" : "🖌️ Peindre (OFF — orbite active)";
+      controls.enabled = !paintMode;
+      hintEl.textContent = paintMode ? "Glisse SUR le personnage pour peindre" : "Glisse le fond pour tourner / zoomer";
+    });
+
+    const hintEl = document.getElementById("hint");
+
+    // -----------------------------------------------------------
+    // Scène
+    // -----------------------------------------------------------
+    const container = document.getElementById("app");
+    const loadingEl = document.getElementById("loading");
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(BACKGROUND_COLOR);
+
+    const camera = new THREE.PerspectiveCamera(35, container.clientWidth / container.clientHeight, 0.05, 100);
+    camera.position.set(0, 1.4, 4.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    container.appendChild(renderer.domElement);
+
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x6b7aa1, 0.9));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    keyLight.position.set(2.5, 4, 3);
+    scene.add(keyLight);
+    const rimLight = new THREE.DirectionalLight(0xcfe0ff, 1.1);
+    rimLight.position.set(-3, 2, -3);
+    scene.add(rimLight);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.1, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    controls.minDistance = 0.3;
+    controls.maxDistance = 7;
+    controls.update();
+
+    // -----------------------------------------------------------
+    // Couleurs à partir de l'attribution (auto puis peinture)
+    // -----------------------------------------------------------
+    let character = null;
+    let mesh = null;
+    let assign = null; // Int8Array, un par sommet
+    const partColor = new Map(PARTS.map((p) => [p.id, new THREE.Color(p.color)]));
+
+    function repaintAll() {
+      const posAttr = mesh.geometry.attributes.position;
+      const colorAttr = mesh.geometry.attributes.color;
+      for (let i = 0; i < posAttr.count; i++) {
+        const c = partColor.get(assign[i]);
+        colorAttr.setXYZ(i, c.r, c.g, c.b);
+      }
+      colorAttr.needsUpdate = true;
+    }
+
+    function repaintVertex(i) {
+      const c = partColor.get(assign[i]);
+      mesh.geometry.attributes.color.setXYZ(i, c.r, c.g, c.b);
+    }
+
+    // -----------------------------------------------------------
+    // Pinceau : peint tous les sommets dans un rayon (espace local du
+    // mesh) autour du point cliqué, pas seulement le sommet touché par
+    // le rayon — pour couvrir une zone en un seul geste.
+    // -----------------------------------------------------------
+    const raycaster = new THREE.Raycaster();
+    const pointerNDC = new THREE.Vector2();
+    let isPainting = false;
+    let touchedIndices = new Set();
+
+    function paintAt(clientX, clientY) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNDC, camera);
+      const hits = raycaster.intersectObject(character, true);
+      if (hits.length === 0) return;
+      const worldPoint = hits[0].point;
+      const localPoint = mesh.worldToLocal(worldPoint.clone());
+      const radius = parseFloat(brushSizeEl.value);
+      const radiusSq = radius * radius;
+      const posAttr = mesh.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      let changed = false;
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        if (v.distanceToSquared(localPoint) <= radiusSq) {
+          if (assign[i] !== activePart) { assign[i] = activePart; repaintVertex(i); changed = true; }
+        }
+      }
+      if (changed) mesh.geometry.attributes.color.needsUpdate = true;
+    }
+
+    renderer.domElement.addEventListener("pointerdown", (e) => {
+      if (!paintMode || !character) return;
+      isPainting = true;
+      renderer.domElement.setPointerCapture(e.pointerId);
+      paintAt(e.clientX, e.clientY);
+    });
+    renderer.domElement.addEventListener("pointermove", (e) => {
+      if (!isPainting) return;
+      paintAt(e.clientX, e.clientY);
+    });
+    function stopPainting() { isPainting = false; }
+    renderer.domElement.addEventListener("pointerup", stopPainting);
+    renderer.domElement.addEventListener("pointercancel", stopPainting);
+    renderer.domElement.addEventListener("pointerleave", stopPainting);
+
+    // -----------------------------------------------------------
+    // Export / reset
+    // -----------------------------------------------------------
+    exportBtn.addEventListener("click", async () => {
+      const arr = Array.from(assign);
+      const text = JSON.stringify(arr);
+      jsonOut.value = text;
+      jsonOut.style.display = "block";
+      try {
+        await navigator.clipboard.writeText(text);
+        exportBtn.textContent = "Copié !";
+        exportBtn.classList.add("copied");
+        setTimeout(() => { exportBtn.textContent = "Exporter le JSON"; exportBtn.classList.remove("copied"); }, 1500);
+      } catch (e) {
+        exportBtn.textContent = "Copié dans le champ ci-dessous";
+      }
+    });
+
+    resetBtn.addEventListener("click", () => {
+      if (!mesh) return;
+      assign = computeAutoAssignment(mesh.geometry.attributes.position);
+      repaintAll();
+    });
+
+    // -----------------------------------------------------------
+    // Chargement
+    // -----------------------------------------------------------
+    const fbxLoader = new FBXLoader();
+    fbxLoader.load(
+      MODEL_URL,
+      (object) => {
+        character = object;
+        character.traverse((child) => {
+          if (child.isMesh) {
+            mesh = child;
+            const posAttr = child.geometry.attributes.position;
+            const colorAttr = new THREE.BufferAttribute(new Float32Array(posAttr.count * 3), 3);
+            child.geometry.setAttribute("color", colorAttr);
+            child.material = new THREE.MeshStandardMaterial({
+              vertexColors: true, metalness: 0.0, roughness: 0.8, envMapIntensity: 0.5,
+            });
+            assign = computeAutoAssignment(posAttr);
+            repaintAll();
+          }
+        });
+
+        const box = new THREE.Box3().setFromObject(character);
+        const size = new THREE.Vector3(); const center = new THREE.Vector3();
+        box.getSize(size); box.getCenter(center);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        character.scale.setScalar(2.1 / maxDim);
+
+        const box2 = new THREE.Box3().setFromObject(character);
+        const size2 = new THREE.Vector3(); const center2 = new THREE.Vector3();
+        box2.getSize(size2); box2.getCenter(center2);
+        character.position.x -= center2.x;
+        character.position.z -= center2.z;
+        character.position.y -= box2.min.y;
+
+        controls.target.set(0, size2.y * 0.55, 0);
+        controls.update();
+
+        scene.add(character);
+        loadingEl.classList.add("hidden");
+      },
+      undefined,
+      (error) => {
+        console.error("Erreur de chargement du FBX :", error);
+        document.getElementById("loading-text").textContent = "Erreur de chargement du modèle.";
+      }
+    );
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    function onResize() {
+      const w = container.clientWidth, h = container.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener("resize", onResize);
+    onResize();
+  </script>
+</body>
+</html>
