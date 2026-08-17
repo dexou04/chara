@@ -345,13 +345,11 @@
             child.castShadow = true;
             child.receiveShadow = true;
             applyGradientVertexColors(child);
-            child.material = new THREE.MeshPhysicalMaterial({
+            child.material = new THREE.MeshStandardMaterial({
               vertexColors: true,
-              metalness: 0.05,
-              roughness: 0.35,
-              clearcoat: 1.0,
-              clearcoatRoughness: 0.12,
-              envMapIntensity: 1.1,
+              metalness: 0.0,
+              roughness: 0.75,
+              envMapIntensity: 0.5,
             });
           }
         });
