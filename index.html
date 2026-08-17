@@ -696,11 +696,12 @@
         character.traverse((child) => {
           if (child.isMesh && child.userData.rig) {
             const rig = child.userData.rig;
-            for (let limb = 1; limb <= 6; limb++) {
-              if (limb === rig.active) continue; // pendant le drag, la valeur est déjà à jour
-              const k = 1 - Math.exp(-SPRING_SPEED * deltaTime);
-              rig.current[limb] += (rig.target[limb] - rig.current[limb]) * k;
-              rig.currentPitch[limb] += (rig.targetPitch[limb] - rig.currentPitch[limb]) * k;
+            const k = 1 - Math.exp(-SPRING_SPEED * deltaTime);
+            for (const joint of rig.joints) {
+              // pendant le drag, current === target déjà (mis à jour dans pointermove),
+              // donc ce lerp ne bouge rien pour l'articulation en cours de manipulation
+              joint.current.yaw += (joint.target.yaw - joint.current.yaw) * k;
+              joint.current.pitch += (joint.target.pitch - joint.current.pitch) * k;
             }
             updateLimbGeometry(child);
           }
