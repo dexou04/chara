@@ -86,7 +86,7 @@
     <div id="loading-text">Chargement du personnage… 0%</div>
   </div>
 
-  <div id="hint">Glisser pour tourner</div>
+  <div id="hint">Glisser le fond pour tourner · glisser un membre pour le bouger</div>
 
   <!-- Import map : on charge three.js et ses modules additionnels (FBXLoader, OrbitControls) -->
   <script type="importmap">
@@ -193,6 +193,17 @@
     scene.add(shadowGround);
 
     // ---------------------------------------------------------------
+    // Membres articulés (le FBX n'a pas de squelette : on simule une
+    // articulation en pivotant les vertex des extrémités — oreilles,
+    // mains, pieds — autour d'un point d'attache estimé automatiquement)
+    // ---------------------------------------------------------------
+    const LIMB_NONE = 0, LIMB_EAR_L = 1, LIMB_EAR_R = 2,
+      LIMB_ARM_L = 3, LIMB_ARM_R = 4, LIMB_LEG_L = 5, LIMB_LEG_R = 6;
+    const DRAG_SENSITIVITY = 0.012; // radians par pixel glissé
+    const MAX_LIMB_ANGLE = THREE.MathUtils.degToRad(55);
+    const SPRING_SPEED = 9; // vitesse du retour élastique
+
+    // ---------------------------------------------------------------
     // Contrôles (rotation à la souris / au doigt)
     // ---------------------------------------------------------------
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -289,10 +300,11 @@
     // Chargement du personnage
     // ---------------------------------------------------------------
 
-    // Calcule une couleur par sommet en fonction de sa distance au centre du
-    // maillage : le corps reste noir, les parties les plus "éloignées"
-    // (bout des oreilles, mains, pieds) basculent progressivement vers le bleu.
-    function applyGradientVertexColors(mesh) {
+    // Calcule la couleur par sommet (dégradé noir → bleu sur les extrémités)
+    // ET construit un "rig" léger : classe chaque sommet éloigné du centre
+    // dans un membre (oreille/main/pied gauche ou droite), avec un pivot et
+    // deux axes de rotation par membre, pour permettre de le faire bouger.
+    function setupCharacterMesh(mesh) {
       const geometry = mesh.geometry;
       const posAttr = geometry.attributes.position;
       const count = posAttr.count;
@@ -301,33 +313,193 @@
       const center = box.getCenter(new THREE.Vector3());
 
       const distances = new Float32Array(count);
-      let maxDist = 0;
+      const dirs = new Float32Array(count * 3);
       const v = new THREE.Vector3();
       for (let i = 0; i < count; i++) {
-        v.fromBufferAttribute(posAttr, i);
-        const d = v.distanceTo(center);
+        v.fromBufferAttribute(posAttr, i).sub(center);
+        const d = v.length();
         distances[i] = d;
-        if (d > maxDist) maxDist = d;
+        if (d > 1e-6) v.divideScalar(d);
+        dirs[i * 3] = v.x;
+        dirs[i * 3 + 1] = v.y;
+        dirs[i * 3 + 2] = v.z;
       }
 
-      // seuils basés sur les percentiles réels de la distribution des distances
       const sorted = Array.from(distances).sort((a, b) => a - b);
       const pct = (p) => sorted[Math.min(count - 1, Math.floor(p * (count - 1)))];
       const startDist = pct(GRADIENT_START_PERCENTILE);
       const endDist = pct(GRADIENT_END_PERCENTILE);
 
       const colors = new Float32Array(count * 3);
+      const weight = new Float32Array(count); // 0 = statique, 1 = extrémité complète
+      const limbId = new Uint8Array(count);
       const tmpColor = new THREE.Color();
+      const limbDirSum = [null, new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+      const limbIndices = [null, [], [], [], [], [], []];
+
       for (let i = 0; i < count; i++) {
         const t = THREE.MathUtils.smoothstep(distances[i], startDist, endDist);
+        weight[i] = t;
+
         tmpColor.copy(COLOR_BODY).lerp(COLOR_TIP, t);
         colors[i * 3] = tmpColor.r;
         colors[i * 3 + 1] = tmpColor.g;
         colors[i * 3 + 2] = tmpColor.b;
+
+        if (t > 0.02) {
+          const dx = dirs[i * 3], dy = dirs[i * 3 + 1], dz = dirs[i * 3 + 2];
+          let limb;
+          if (dy > 0.35) limb = dx < 0 ? LIMB_EAR_L : LIMB_EAR_R;
+          else if (dy < -0.35) limb = dx < 0 ? LIMB_LEG_L : LIMB_LEG_R;
+          else limb = dx < 0 ? LIMB_ARM_L : LIMB_ARM_R;
+          limbId[i] = limb;
+          limbIndices[limb].push(i);
+          limbDirSum[limb].x += dx; limbDirSum[limb].y += dy; limbDirSum[limb].z += dz;
+        }
+      }
+      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+      // pivot + axes de rotation pour chaque membre détecté
+      const pivots = [null], yawAxes = [null], pitchAxes = [null];
+      for (let limb = 1; limb <= 6; limb++) {
+        const dirSum = limbDirSum[limb];
+        const avgDir = dirSum.lengthSq() > 1e-8 ? dirSum.normalize() : new THREE.Vector3(0, 1, 0);
+        pivots[limb] = center.clone().addScaledVector(avgDir, startDist);
+        yawAxes[limb] = new THREE.Vector3(0, 1, 0);
+        let pitchAxis = new THREE.Vector3().crossVectors(yawAxes[limb], avgDir);
+        if (pitchAxis.lengthSq() < 0.02) pitchAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), avgDir);
+        pitchAxes[limb] = pitchAxis.normalize();
       }
 
-      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+      mesh.userData.rig = {
+        basePositions: Float32Array.from(posAttr.array),
+        weight,
+        limbId,
+        limbIndices,
+        pivots,
+        yawAxes,
+        pitchAxes,
+        current: new Float32Array(7), // angle de lacet actuel par membre
+        currentPitch: new Float32Array(7),
+        target: new Float32Array(7),
+        targetPitch: new Float32Array(7),
+        active: 0,
+      };
     }
+
+    // Applique la pose courante du rig aux positions des sommets concernés
+    const _tmpV = new THREE.Vector3();
+    const _tmpQYaw = new THREE.Quaternion();
+    const _tmpQPitch = new THREE.Quaternion();
+    const _tmpQ = new THREE.Quaternion();
+    function updateLimbGeometry(mesh) {
+      const rig = mesh.userData.rig;
+      if (!rig) return false;
+      const posAttr = mesh.geometry.attributes.position;
+      let anyActive = false;
+
+      for (let limb = 1; limb <= 6; limb++) {
+        const yaw = rig.current[limb];
+        const pitch = rig.currentPitch[limb];
+        if (Math.abs(yaw) < 0.0005 && Math.abs(pitch) < 0.0005) continue;
+        anyActive = true;
+        const indices = rig.limbIndices[limb];
+        const pivot = rig.pivots[limb];
+
+        for (let k = 0; k < indices.length; k++) {
+          const i = indices[k];
+          const w = rig.weight[i];
+          _tmpQYaw.setFromAxisAngle(rig.yawAxes[limb], yaw * w);
+          _tmpQPitch.setFromAxisAngle(rig.pitchAxes[limb], pitch * w);
+          _tmpQ.copy(_tmpQYaw).multiply(_tmpQPitch);
+
+          _tmpV.set(
+            rig.basePositions[i * 3] - pivot.x,
+            rig.basePositions[i * 3 + 1] - pivot.y,
+            rig.basePositions[i * 3 + 2] - pivot.z
+          ).applyQuaternion(_tmpQ).add(pivot);
+
+          posAttr.setXYZ(i, _tmpV.x, _tmpV.y, _tmpV.z);
+        }
+      }
+
+      if (anyActive) {
+        posAttr.needsUpdate = true;
+        mesh.geometry.computeVertexNormals();
+      }
+      return anyActive;
+    }
+
+    // Raycasting : détermine quel membre (le cas échéant) est sous le pointeur
+    const raycaster = new THREE.Raycaster();
+    const pointerNDC = new THREE.Vector2();
+    function pickLimb(event) {
+      if (!character) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNDC, camera);
+      const hits = raycaster.intersectObject(character, true);
+      if (hits.length === 0 || !hits[0].face) return null;
+      const mesh = hits[0].object;
+      const rig = mesh.userData.rig;
+      if (!rig) return null;
+      const limb = rig.limbId[hits[0].face.a];
+      return limb ? { mesh, rig, limb } : null;
+    }
+
+    let draggingRig = null;
+    let dragLimb = 0;
+    let dragStartX = 0, dragStartY = 0;
+    let dragStartYaw = 0, dragStartPitch = 0;
+
+    renderer.domElement.addEventListener("pointerdown", (event) => {
+      const pick = pickLimb(event);
+      if (pick) {
+        draggingRig = pick.rig;
+        dragLimb = pick.limb;
+        draggingRig.active = dragLimb;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        dragStartYaw = draggingRig.current[dragLimb];
+        dragStartPitch = draggingRig.currentPitch[dragLimb];
+        controls.enabled = false;
+        renderer.domElement.setPointerCapture(event.pointerId);
+        renderer.domElement.style.cursor = "grabbing";
+      }
+    });
+
+    renderer.domElement.addEventListener("pointermove", (event) => {
+      if (draggingRig) {
+        const dx = event.clientX - dragStartX;
+        const dy = event.clientY - dragStartY;
+        const yaw = THREE.MathUtils.clamp(dragStartYaw + dx * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
+        const pitch = THREE.MathUtils.clamp(dragStartPitch - dy * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
+        draggingRig.current[dragLimb] = yaw;
+        draggingRig.currentPitch[dragLimb] = pitch;
+        draggingRig.target[dragLimb] = yaw;
+        draggingRig.targetPitch[dragLimb] = pitch;
+      } else if (character) {
+        // survol : curseur "grab" au-dessus d'un membre déplaçable
+        const pick = pickLimb(event);
+        renderer.domElement.style.cursor = pick ? "grab" : "default";
+      }
+    });
+
+    function releaseLimb() {
+      if (draggingRig) {
+        draggingRig.target[dragLimb] = 0;
+        draggingRig.targetPitch[dragLimb] = 0;
+        draggingRig.active = 0;
+        draggingRig = null;
+        dragLimb = 0;
+        controls.enabled = true;
+        renderer.domElement.style.cursor = "default";
+      }
+    }
+    renderer.domElement.addEventListener("pointerup", releaseLimb);
+    renderer.domElement.addEventListener("pointercancel", releaseLimb);
+    renderer.domElement.addEventListener("pointerleave", releaseLimb);
 
     let character = null;
     let floatBase = 0;
@@ -339,12 +511,13 @@
         character = object;
 
         // Remplace le matériau d'origine (texture patchwork) par un rendu
-        // "figurine" glossy : noir + dégradé bleu par vertex colors.
+        // "figurine" mate : noir + dégradé bleu par vertex colors, et
+        // prépare le rig de membres articulés (drag pour bouger).
         character.traverse((child) => {
           if (child.isMesh) {
             child.castShadow = true;
             child.receiveShadow = true;
-            applyGradientVertexColors(child);
+            setupCharacterMesh(child);
             child.material = new THREE.MeshStandardMaterial({
               vertexColors: true,
               metalness: 0.0,
@@ -404,15 +577,32 @@
     // Boucle d'animation
     // ---------------------------------------------------------------
     const clock = new THREE.Clock();
+    let elapsedTime = 0;
 
     function animate() {
       requestAnimationFrame(animate);
-      const t = clock.getElapsedTime();
+      const deltaTime = Math.min(0.05, clock.getDelta());
+      elapsedTime += deltaTime;
+      const t = elapsedTime;
 
       // flottement du personnage
       if (character) {
         character.position.y = floatBase + Math.sin(t * 1.2) * 0.06;
         character.rotation.z = Math.sin(t * 0.8) * 0.015;
+
+        // retour élastique des membres relâchés + application de la pose
+        character.traverse((child) => {
+          if (child.isMesh && child.userData.rig) {
+            const rig = child.userData.rig;
+            for (let limb = 1; limb <= 6; limb++) {
+              if (limb === rig.active) continue; // pendant le drag, la valeur est déjà à jour
+              const k = 1 - Math.exp(-SPRING_SPEED * deltaTime);
+              rig.current[limb] += (rig.target[limb] - rig.current[limb]) * k;
+              rig.currentPitch[limb] += (rig.targetPitch[limb] - rig.currentPitch[limb]) * k;
+            }
+            updateLimbGeometry(child);
+          }
+        });
       }
 
       // dérive douce des particules (flottement + rotation lente autour du perso)
