@@ -194,14 +194,43 @@
 
     // ---------------------------------------------------------------
     // Membres articulés (le FBX n'a pas de squelette : on simule une
-    // articulation en pivotant les vertex des extrémités — oreilles,
-    // mains, pieds — autour d'un point d'attache estimé automatiquement)
+    // vraie chaîne hiérarchique — hanche→genou, épaule→coude, cou —
+    // à partir de points calibrés à la main directement sur le mesh,
+    // au lieu de deviner une zone automatiquement)
     // ---------------------------------------------------------------
-    const LIMB_NONE = 0, LIMB_EAR_L = 1, LIMB_EAR_R = 2,
-      LIMB_ARM_L = 3, LIMB_ARM_R = 4, LIMB_LEG_L = 5, LIMB_LEG_R = 6;
     const DRAG_SENSITIVITY = 0.012; // radians par pixel glissé
     const MAX_LIMB_ANGLE = THREE.MathUtils.degToRad(55);
     const SPRING_SPEED = 9; // vitesse du retour élastique
+
+    // Repère local du FBX : Z est l'axe vertical (confirmé par la bounding
+    // box du mesh : Z va de 0 aux pieds à ~1.9 en haut de la tête).
+    const UP_AXIS = new THREE.Vector3(0, 0, 1);
+
+    // Points cliqués sur le mesh pendant la calibration (espace local du
+    // mesh). Chaque chaîne = [articulation proche du corps, articulation
+    // distale]. Le "cou" n'a qu'une seule articulation (fait basculer
+    // toute la tête/oreilles ensemble).
+    const CHAIN_DEFS = [
+      { name: "hanche_gauche", child: "genou_gauche", radius: 0.12, sMin: -0.03 },
+      { name: "hanche_droite", child: "genou_droit", radius: 0.12, sMin: -0.03 },
+      { name: "epaule_gauche", child: "coude_gauche", radius: 0.12, sMin: -0.03 },
+      { name: "epaule_droite", child: "coude_droit", radius: 0.12, sMin: -0.03 },
+      { name: "cou", child: null, radius: 0.45, sMin: -0.02 },
+    ];
+    const CALIBRATED_POINTS = {
+      genou_gauche: new THREE.Vector3(0.11563, -0.06482, 0.38684),
+      genou_droit: new THREE.Vector3(-0.10082, -0.06814, 0.40198),
+      hanche_gauche: new THREE.Vector3(0.08939, -0.07064, 0.51424),
+      hanche_droite: new THREE.Vector3(-0.08397, -0.07663, 0.52264),
+      epaule_gauche: new THREE.Vector3(0.10254, -0.00732, 0.77457),
+      epaule_droite: new THREE.Vector3(-0.09953, -0.00956, 0.77488),
+      coude_gauche: new THREE.Vector3(0.31632, 0.00123, 0.75121),
+      coude_droit: new THREE.Vector3(-0.35283, 0.00026, 0.75139),
+      cou: new THREE.Vector3(0.02064, -0.05691, 0.81782),
+    };
+    const BLEND_ATTACH = 0.045; // zone de transition à l'attache sur le corps
+    const BLEND_JOINT = 0.035;  // zone de transition au genou/coude
+    const EDGE_FADE_START = 0.7; // fraction du rayon où le fondu de bord commence
 
     // ---------------------------------------------------------------
     // Contrôles (rotation à la souris / au doigt)
@@ -300,137 +329,207 @@
     // Chargement du personnage
     // ---------------------------------------------------------------
 
-    // Calcule la couleur par sommet (dégradé noir → bleu sur les extrémités)
-    // ET construit un "rig" léger : classe chaque sommet éloigné du centre
-    // dans un membre (oreille/main/pied gauche ou droite), avec un pivot et
-    // deux axes de rotation par membre, pour permettre de le faire bouger.
-    function setupCharacterMesh(mesh) {
-      const geometry = mesh.geometry;
-      const posAttr = geometry.attributes.position;
+    // Applique le dégradé de couleur noir → bleu (extrémités), inchangé,
+    // indépendant du rig d'articulation.
+    function applyGradientColors(mesh) {
+      const posAttr = mesh.geometry.attributes.position;
       const count = posAttr.count;
-
       const box = new THREE.Box3().setFromBufferAttribute(posAttr);
       const center = box.getCenter(new THREE.Vector3());
-
       const distances = new Float32Array(count);
-      const dirs = new Float32Array(count * 3);
       const v = new THREE.Vector3();
       for (let i = 0; i < count; i++) {
         v.fromBufferAttribute(posAttr, i).sub(center);
-        const d = v.length();
-        distances[i] = d;
-        if (d > 1e-6) v.divideScalar(d);
-        dirs[i * 3] = v.x;
-        dirs[i * 3 + 1] = v.y;
-        dirs[i * 3 + 2] = v.z;
+        distances[i] = v.length();
       }
-
       const sorted = Array.from(distances).sort((a, b) => a - b);
       const pct = (p) => sorted[Math.min(count - 1, Math.floor(p * (count - 1)))];
       const startDist = pct(GRADIENT_START_PERCENTILE);
       const endDist = pct(GRADIENT_END_PERCENTILE);
-
       const colors = new Float32Array(count * 3);
-      const weight = new Float32Array(count); // 0 = statique, 1 = extrémité complète
-      const limbId = new Uint8Array(count);
       const tmpColor = new THREE.Color();
-      const limbDirSum = [null, new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-      const limbIndices = [null, [], [], [], [], [], []];
-
       for (let i = 0; i < count; i++) {
         const t = THREE.MathUtils.smoothstep(distances[i], startDist, endDist);
-        weight[i] = t;
-
         tmpColor.copy(COLOR_BODY).lerp(COLOR_TIP, t);
-        colors[i * 3] = tmpColor.r;
-        colors[i * 3 + 1] = tmpColor.g;
-        colors[i * 3 + 2] = tmpColor.b;
+        colors[i * 3] = tmpColor.r; colors[i * 3 + 1] = tmpColor.g; colors[i * 3 + 2] = tmpColor.b;
+      }
+      mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    }
 
-        if (t > 0.02) {
-          const dx = dirs[i * 3], dy = dirs[i * 3 + 1], dz = dirs[i * 3 + 2];
-          let limb;
-          if (dy > 0.35) limb = dx < 0 ? LIMB_EAR_L : LIMB_EAR_R;
-          else if (dy < -0.35) limb = dx < 0 ? LIMB_LEG_L : LIMB_LEG_R;
-          else limb = dx < 0 ? LIMB_ARM_L : LIMB_ARM_R;
-          limbId[i] = limb;
-          limbIndices[limb].push(i);
-          limbDirSum[limb].x += dx; limbDirSum[limb].y += dy; limbDirSum[limb].z += dz;
+    // Trouve le sommet du mesh le plus proche d'un point donné (permet de
+    // "coller" un point calibré, cliqué sur la surface, à un vrai sommet).
+    function nearestVertexPos(posAttr, point) {
+      let best = -1, bestDist = Infinity;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        const d = v.distanceToSquared(point);
+        if (d < bestDist) { bestDist = d; best = i; }
+      }
+      return v.fromBufferAttribute(posAttr, best).clone();
+    }
+
+    // Pour une chaîne (parent -> enfant), trouve tous les sommets proches
+    // de l'axe du membre (distance perpendiculaire < radius) au-delà du
+    // parent (s > sMin), en affinant la direction sur une 2e passe vers le
+    // vrai bout du membre (main/pied) pour un axe plus fidèle qu'une simple
+    // droite parent->enfant.
+    function analyzeAxis(posAttr, parentPos, dirGuess, radius, sMin) {
+      const v = new THREE.Vector3();
+      const rel = new THREE.Vector3();
+      const perp = new THREE.Vector3();
+      const members = [];
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        rel.copy(v).sub(parentPos);
+        const s = rel.dot(dirGuess);
+        perp.copy(rel).addScaledVector(dirGuess, -s);
+        const d = perp.length();
+        if (s > sMin && d < radius) members.push({ i, s, d });
+      }
+      return members;
+    }
+
+    // Construit le rig hiérarchique complet (hanche->genou, épaule->coude,
+    // cou) à partir des points calibrés à la main, et prépare pour chaque
+    // sommet concerné les poids d'influence de chaque articulation.
+    function setupCharacterMesh(mesh) {
+      applyGradientColors(mesh);
+      const geometry = mesh.geometry;
+      const posAttr = geometry.attributes.position;
+      const count = posAttr.count;
+
+      // Snappe chaque point calibré au sommet réel le plus proche
+      const snapped = {};
+      for (const key in CALIBRATED_POINTS) {
+        snapped[key] = nearestVertexPos(posAttr, CALIBRATED_POINTS[key]);
+      }
+
+      const joints = []; // { name, pivot, axisA, axisB, parentIndex }
+      // vertexData[i] = { parentJoint, parentWeight, childJoint, childWeight } | null
+      const vertexData = new Array(count).fill(null);
+
+      for (const def of CHAIN_DEFS) {
+        const parentPos = snapped[def.name];
+        const hasChild = !!def.child;
+        let dir, members, childS = null;
+
+        if (hasChild) {
+          const childPos = snapped[def.child];
+          const dir0 = childPos.clone().sub(parentPos).normalize();
+          const pass1 = analyzeAxis(posAttr, parentPos, dir0, def.radius, def.sMin);
+          let tip = parentPos.clone().addScaledVector(dir0, 0.1);
+          let bestS = -Infinity;
+          for (const m of pass1) if (m.s > bestS) { bestS = m.s; tip = new THREE.Vector3().fromBufferAttribute(posAttr, m.i); }
+          dir = tip.clone().sub(parentPos).normalize();
+          members = analyzeAxis(posAttr, parentPos, dir, def.radius, def.sMin);
+          childS = childPos.clone().sub(parentPos).dot(dir);
+        } else {
+          dir = UP_AXIS.clone();
+          members = analyzeAxis(posAttr, parentPos, dir, def.radius, def.sMin);
+        }
+
+        const axisA = UP_AXIS.clone();
+        let axisB = new THREE.Vector3().crossVectors(axisA, dir);
+        if (axisB.lengthSq() < 0.02) axisB = new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), dir);
+        axisB.normalize();
+
+        const parentJointIndex = joints.length;
+        joints.push({ name: def.name, pivot: parentPos.clone(), axisA, axisB, current: { yaw: 0, pitch: 0 }, target: { yaw: 0, pitch: 0 } });
+
+        let childJointIndex = -1;
+        if (hasChild) {
+          childJointIndex = joints.length;
+          joints.push({ name: def.child, pivot: snapped[def.child].clone(), axisA, axisB, current: { yaw: 0, pitch: 0 }, target: { yaw: 0, pitch: 0 } });
+        }
+
+        for (const m of members) {
+          if (vertexData[m.i]) continue; // déjà pris par une autre chaîne (priorité au premier)
+          const edgeFade = 1 - THREE.MathUtils.smoothstep(m.d, def.radius * EDGE_FADE_START, def.radius);
+          const wParent = THREE.MathUtils.smoothstep(m.s, def.sMin, def.sMin + BLEND_ATTACH) * edgeFade;
+          let wChild = 0;
+          if (hasChild) {
+            wChild = THREE.MathUtils.smoothstep(m.s, childS - BLEND_JOINT, childS + BLEND_JOINT) * edgeFade;
+          }
+          vertexData[m.i] = {
+            parentJoint: parentJointIndex, parentWeight: wParent,
+            childJoint: hasChild ? childJointIndex : -1, childWeight: wChild,
+          };
         }
       }
-      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
-      // pivot + axes de rotation pour chaque membre détecté
-      const pivots = [null], yawAxes = [null], pitchAxes = [null];
-      for (let limb = 1; limb <= 6; limb++) {
-        const dirSum = limbDirSum[limb];
-        const avgDir = dirSum.lengthSq() > 1e-8 ? dirSum.normalize() : new THREE.Vector3(0, 1, 0);
-        pivots[limb] = center.clone().addScaledVector(avgDir, startDist);
-        yawAxes[limb] = new THREE.Vector3(0, 1, 0);
-        let pitchAxis = new THREE.Vector3().crossVectors(yawAxes[limb], avgDir);
-        if (pitchAxis.lengthSq() < 0.02) pitchAxis = new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), avgDir);
-        pitchAxes[limb] = pitchAxis.normalize();
+      // Compacte en tableaux typés pour la boucle d'animation
+      const activeIndices = [];
+      const parentJoint = new Int16Array(count).fill(-1);
+      const parentWeight = new Float32Array(count);
+      const childJoint = new Int16Array(count).fill(-1);
+      const childWeight = new Float32Array(count);
+      for (let i = 0; i < count; i++) {
+        const d = vertexData[i];
+        if (!d) continue;
+        activeIndices.push(i);
+        parentJoint[i] = d.parentJoint; parentWeight[i] = d.parentWeight;
+        childJoint[i] = d.childJoint; childWeight[i] = d.childWeight;
       }
 
       mesh.userData.rig = {
         basePositions: Float32Array.from(posAttr.array),
-        weight,
-        limbId,
-        limbIndices,
-        pivots,
-        yawAxes,
-        pitchAxes,
-        current: new Float32Array(7), // angle de lacet actuel par membre
-        currentPitch: new Float32Array(7),
-        target: new Float32Array(7),
-        targetPitch: new Float32Array(7),
-        active: 0,
+        joints,
+        activeIndices,
+        parentJoint, parentWeight, childJoint, childWeight,
+        draggingJoint: -1,
       };
     }
 
-    // Applique la pose courante du rig aux positions des sommets concernés
+    // Applique la pose courante du rig aux positions des sommets concernés :
+    // pour chaque sommet, on part de la position de repos, on applique
+    // d'abord la rotation de l'articulation distale (genou/coude) autour de
+    // son pivot de repos, PUIS la rotation de l'articulation proche du corps
+    // (hanche/épaule) autour de son pivot — exactement comme un vrai
+    // squelette hiérarchique (plier la hanche entraîne aussi le genou).
     const _tmpV = new THREE.Vector3();
     const _tmpQYaw = new THREE.Quaternion();
     const _tmpQPitch = new THREE.Quaternion();
     const _tmpQ = new THREE.Quaternion();
+    function applyJoint(pos, joint, weight) {
+      if (weight < 0.0004) return;
+      _tmpQYaw.setFromAxisAngle(joint.axisA, joint.current.yaw * weight);
+      _tmpQPitch.setFromAxisAngle(joint.axisB, joint.current.pitch * weight);
+      _tmpQ.copy(_tmpQYaw).multiply(_tmpQPitch);
+      pos.sub(joint.pivot).applyQuaternion(_tmpQ).add(joint.pivot);
+    }
+
     function updateLimbGeometry(mesh) {
       const rig = mesh.userData.rig;
       if (!rig) return false;
+
+      const anyActive = rig.joints.some((j) => Math.abs(j.current.yaw) > 0.0004 || Math.abs(j.current.pitch) > 0.0004);
+      if (!anyActive) return false;
+
       const posAttr = mesh.geometry.attributes.position;
-      let anyActive = false;
+      for (let k = 0; k < rig.activeIndices.length; k++) {
+        const i = rig.activeIndices[k];
+        _tmpV.set(rig.basePositions[i * 3], rig.basePositions[i * 3 + 1], rig.basePositions[i * 3 + 2]);
 
-      for (let limb = 1; limb <= 6; limb++) {
-        const yaw = rig.current[limb];
-        const pitch = rig.currentPitch[limb];
-        if (Math.abs(yaw) < 0.0005 && Math.abs(pitch) < 0.0005) continue;
-        anyActive = true;
-        const indices = rig.limbIndices[limb];
-        const pivot = rig.pivots[limb];
+        const cj = rig.childJoint[i];
+        if (cj !== -1) applyJoint(_tmpV, rig.joints[cj], rig.childWeight[i]);
 
-        for (let k = 0; k < indices.length; k++) {
-          const i = indices[k];
-          const w = rig.weight[i];
-          _tmpQYaw.setFromAxisAngle(rig.yawAxes[limb], yaw * w);
-          _tmpQPitch.setFromAxisAngle(rig.pitchAxes[limb], pitch * w);
-          _tmpQ.copy(_tmpQYaw).multiply(_tmpQPitch);
+        const pj = rig.parentJoint[i];
+        if (pj !== -1) applyJoint(_tmpV, rig.joints[pj], rig.parentWeight[i]);
 
-          _tmpV.set(
-            rig.basePositions[i * 3] - pivot.x,
-            rig.basePositions[i * 3 + 1] - pivot.y,
-            rig.basePositions[i * 3 + 2] - pivot.z
-          ).applyQuaternion(_tmpQ).add(pivot);
-
-          posAttr.setXYZ(i, _tmpV.x, _tmpV.y, _tmpV.z);
-        }
+        posAttr.setXYZ(i, _tmpV.x, _tmpV.y, _tmpV.z);
       }
 
-      if (anyActive) {
-        posAttr.needsUpdate = true;
-        mesh.geometry.computeVertexNormals();
-      }
-      return anyActive;
+      posAttr.needsUpdate = true;
+      mesh.geometry.computeVertexNormals();
+      return true;
     }
 
-    // Raycasting : détermine quel membre (le cas échéant) est sous le pointeur
+    // Raycasting : détermine quelle articulation (le cas échéant) est sous
+    // le pointeur. Un sommet peut être influencé par 2 articulations (ex :
+    // hanche + genou) ; on choisit celle qui est la plus "engagée" à cet
+    // endroit précis (poids le plus fort) — cliquer près du pied attrape
+    // le genou, cliquer près de la cuisse attrape la hanche.
     const raycaster = new THREE.Raycaster();
     const pointerNDC = new THREE.Vector2();
     function pickLimb(event) {
@@ -444,12 +543,17 @@
       const mesh = hits[0].object;
       const rig = mesh.userData.rig;
       if (!rig) return null;
-      const limb = rig.limbId[hits[0].face.a];
-      return limb ? { mesh, rig, limb } : null;
+      const vi = hits[0].face.a;
+      const pj = rig.parentJoint[vi], pw = rig.parentWeight[vi];
+      const cj = rig.childJoint[vi], cw = rig.childWeight[vi];
+      if (pj === -1 && cj === -1) return null;
+      const jointIndex = cw > pw ? cj : pj;
+      if (jointIndex === -1) return null;
+      return { mesh, rig, joint: rig.joints[jointIndex] };
     }
 
     let draggingRig = null;
-    let dragLimb = 0;
+    let draggingJoint = null;
     let dragStartX = 0, dragStartY = 0;
     let dragStartYaw = 0, dragStartPitch = 0;
 
@@ -457,12 +561,11 @@
       const pick = pickLimb(event);
       if (pick) {
         draggingRig = pick.rig;
-        dragLimb = pick.limb;
-        draggingRig.active = dragLimb;
+        draggingJoint = pick.joint;
         dragStartX = event.clientX;
         dragStartY = event.clientY;
-        dragStartYaw = draggingRig.current[dragLimb];
-        dragStartPitch = draggingRig.currentPitch[dragLimb];
+        dragStartYaw = draggingJoint.current.yaw;
+        dragStartPitch = draggingJoint.current.pitch;
         controls.enabled = false;
         renderer.domElement.setPointerCapture(event.pointerId);
         renderer.domElement.style.cursor = "grabbing";
@@ -470,15 +573,15 @@
     });
 
     renderer.domElement.addEventListener("pointermove", (event) => {
-      if (draggingRig) {
+      if (draggingJoint) {
         const dx = event.clientX - dragStartX;
         const dy = event.clientY - dragStartY;
         const yaw = THREE.MathUtils.clamp(dragStartYaw + dx * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
         const pitch = THREE.MathUtils.clamp(dragStartPitch - dy * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
-        draggingRig.current[dragLimb] = yaw;
-        draggingRig.currentPitch[dragLimb] = pitch;
-        draggingRig.target[dragLimb] = yaw;
-        draggingRig.targetPitch[dragLimb] = pitch;
+        draggingJoint.current.yaw = yaw;
+        draggingJoint.current.pitch = pitch;
+        draggingJoint.target.yaw = yaw;
+        draggingJoint.target.pitch = pitch;
       } else if (character) {
         // survol : curseur "grab" au-dessus d'un membre déplaçable
         const pick = pickLimb(event);
@@ -487,12 +590,11 @@
     });
 
     function releaseLimb() {
-      if (draggingRig) {
-        draggingRig.target[dragLimb] = 0;
-        draggingRig.targetPitch[dragLimb] = 0;
-        draggingRig.active = 0;
+      if (draggingJoint) {
+        draggingJoint.target.yaw = 0;
+        draggingJoint.target.pitch = 0;
         draggingRig = null;
-        dragLimb = 0;
+        draggingJoint = null;
         controls.enabled = true;
         renderer.domElement.style.cursor = "default";
       }
