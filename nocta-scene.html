@@ -8650,7 +8650,7 @@ scene.fog = new THREE.FogExp2(0x05060f, 0.028);
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.05, 500);
 // Position de départ proche/zoomée sur le point d'apparition du chat (CAT_SPAWN
 // = 0,1,4 plus bas dans le fichier) : caméra légèrement au-dessus et derrière.
-camera.position.set(0.9, 1.7, 5.2);
+camera.position.set(1.1, 2.0, 5.9);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -8669,15 +8669,15 @@ container.appendChild(renderer.domElement);
    tourner), et se recentre automatiquement derrière lui dès qu'on relâche
    le clic. La molette règle la distance de zoom. */
 const CAM = {
-  distance: 1.7,        // distance actuelle caméra <-> chat (molette) — zoomée bcp plus près
-  minDistance: 0.9,
-  maxDistance: 3.2,
-  baseHeight: 0.85,      // hauteur de la caméra au-dessus du sol du chat
-  lookHeight: 0.38,      // hauteur du point visé, au-dessus du chat (plus bas
+  distance: 2.1,        // distance actuelle caméra <-> chat (molette)
+  minDistance: 1.1,
+  maxDistance: 3.6,
+  baseHeight: 1.0,      // hauteur de la caméra au-dessus du sol du chat
+  lookHeight: 1.15,      // hauteur du point visé, au-dessus du chat (plus bas
                          // = le chat remonte à l'écran, plus proche du centre
                          // haut du cadre au lieu du bas)
   yawOffset: 0,          // décalage libre (souris) par rapport à "pile derrière"
-  pitch: 0.30,           // inclinaison verticale (souris), en radians
+  pitch: 0.14,           // inclinaison verticale (souris), en radians
   minPitch: -0.05,
   maxPitch: 1.05,
   yawSensitivity: 0.0055,
@@ -8750,7 +8750,7 @@ renderer.domElement.addEventListener('wheel', (e) => {
 
 // Position/visée initiales, avant même le chargement du chat (au niveau du
 // point d'apparition CAT_SPAWN défini plus bas).
-camera.lookAt(0, 1.85, 4);
+camera.lookAt(0, 2.55, 4);
 
 function updateChaseCamera(delta) {
   if (!catGroup) return;
