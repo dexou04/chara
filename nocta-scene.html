@@ -8650,7 +8650,7 @@ scene.fog = new THREE.FogExp2(0x05060f, 0.028);
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.05, 500);
 // Position de départ proche/zoomée sur le point d'apparition du chat (CAT_SPAWN
 // = 0,1,4 plus bas dans le fichier) : caméra légèrement au-dessus et derrière.
-camera.position.set(1.2, 2.1, 6.2);
+camera.position.set(0.7, 1.85, 5.3);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -8669,9 +8669,9 @@ container.appendChild(renderer.domElement);
    tourner), et se recentre automatiquement derrière lui dès qu'on relâche
    le clic. La molette règle la distance de zoom. */
 const CAM = {
-  distance: 2.3,        // distance actuelle caméra <-> chat (molette)
-  minDistance: 1.2,
-  maxDistance: 3.8,
+  distance: 1.4,        // distance actuelle caméra <-> chat (molette)
+  minDistance: 0.8,
+  maxDistance: 2.6,
   baseHeight: 1.15,      // hauteur de la caméra au-dessus du sol du chat
   lookHeight: 0.55,      // hauteur du point visé, au-dessus du chat (plus bas
                          // = le chat remonte à l'écran, plus proche du centre
