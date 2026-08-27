@@ -8637,11 +8637,8 @@ version 0.6.9
    ========================================================= */
 
 const PATHS = {
-  catGlb:       'assets/cat.glb',
-  cribFbx:      'assets/Crib.fbx',
-  cloudsFbx:    'assets/Stylized Clouds Pack - Vol 09.fbx',
-  cribAlbedo:   'textures/Crib_texture_albedo.png',
-  cribEmission: 'textures/Crib_emission.png',
+  catGlb:      'assets/cat.glb',
+  buildingGlb: 'assets/dragon_gate_inn_with_neon.glb',
 };
 
 /* ---------- Scene / camera / renderer ---------- */
@@ -8729,11 +8726,19 @@ function showError(msg) {
 const animatables = [];
 const mouse = { x: 0, y: 0 };
 
-/* ---------- Load: CAT (glb, maillage statique, pas de rig => on anime le groupe) ---------- */
+/* ---------- Load: CAT (glb, squelette animé — IdleNorm/WalkCycle/IdleTailSwoosh/SitDown/IdleSit/StandUp) ---------- */
+let catMixer = null;
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(PATHS.catGlb, (gltf) => {
   const catRoot = gltf.scene;
-  catRoot.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  catRoot.traverse(o => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(m => { if (m && m.map) m.map.encoding = THREE.sRGBEncoding; });
+    }
+  });
 
   const box = new THREE.Box3().setFromObject(catRoot);
   const size = new THREE.Vector3(); box.getSize(size);
@@ -8749,12 +8754,30 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
   catGroup.add(catRoot);
   scene.add(catGroup);
 
+  // Lecture de l'animation d'idle du rig via AnimationMixer
+  if (gltf.animations && gltf.animations.length) {
+    catMixer = new THREE.AnimationMixer(catRoot);
+    const idleClip = gltf.animations.find(c => c.name === 'IdleNorm') || gltf.animations[0];
+    const idleAction = catMixer.clipAction(idleClip);
+    idleAction.play();
+
+    // De temps en temps, un petit "tail swoosh" pour casser la boucle d'idle
+    const swooshClip = gltf.animations.find(c => c.name === 'IdleTailSwoosh');
+    if (swooshClip) {
+      const swooshAction = catMixer.clipAction(swooshClip);
+      swooshAction.setLoop(THREE.LoopOnce);
+      swooshAction.clampWhenFinished = true;
+      setInterval(() => {
+        swooshAction.reset().play();
+        idleAction.crossFadeTo(swooshAction, 0.3, false);
+      }, 8000 + Math.random() * 4000);
+    }
+  }
+
   animatables.push({
-    update(t) {
-      catGroup.position.y = Math.sin(t * 1.6) * 0.05;
+    update(t, delta) {
+      if (catMixer) catMixer.update(delta);
       catGroup.rotation.y = Math.sin(t * 0.35) * 0.35 + mouse.x * 0.25;
-      const s = 1 + Math.sin(t * 1.6) * 0.015;
-      catRoot.scale.set(scale * (1 + mouse.y * 0.01), scale * s, scale);
     }
   });
 
@@ -8763,24 +8786,14 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
 
 /* ---------- Load: CRIB (fbx, environnement complet ~8m, 115 meshes) ----------
    Analyse : ce fichier n'est pas un simple accessoire mais une scène/pièce
-   entière (murs, sol, briques...) modélisée en centimètres. L'ancien code
-   forçait sa hauteur à 1.6 unité (fait pour un petit objet), ce qui
-   écrasait toute la pièce en un minuscule blob déformé — c'était la
-   cause du rendu tordu que tu as vu. */
-const cribManager = new THREE.LoadingManager();
-cribManager.setURLModifier((url) => {
-  const lower = url.toLowerCase();
-  if (lower.startsWith('data:') || lower.startsWith('blob:')) return url;
-  if (lower.endsWith('.fbx')) return url; // ne pas intercepter le chargement du .fbx lui-même
-  if (lower.includes('emiss') || lower.includes('_e.png') || lower.includes('texture_e')) {
-    return PATHS.cribEmission;
-  }
-  return PATHS.cribAlbedo;
-});
-const fbxLoader = new THREE.FBXLoader(cribManager);
-let cribEmissiveMats = [];
-fbxLoader.load(PATHS.cribFbx, (fbx) => {
-  fbx.traverse((o) => {
+   entière. On la remplace ici par le portail "Dragon Gate Inn" (glb,
+   déjà à une échelle raisonnable en mètres — pas de conversion cm->m
+   nécessaire, contrairement à l'ancien Crib.fbx). */
+const buildingLoader = new THREE.GLTFLoader();
+let buildingEmissiveMats = [];
+buildingLoader.load(PATHS.buildingGlb, (gltf) => {
+  const building = gltf.scene;
+  building.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
       o.receiveShadow = true;
@@ -8788,93 +8801,40 @@ fbxLoader.load(PATHS.cribFbx, (fbx) => {
       mats.forEach((m) => {
         if (!m) return;
         if (m.map) m.map.encoding = THREE.sRGBEncoding;
-        if (m.emissiveMap) {
-          m.emissiveMap.encoding = THREE.sRGBEncoding;
+        if (m.emissiveMap || (m.emissive && (m.emissive.r || m.emissive.g || m.emissive.b))) {
+          if (m.emissiveMap) m.emissiveMap.encoding = THREE.sRGBEncoding;
           m.emissiveIntensity = 1.4;
-          cribEmissiveMats.push(m);
+          buildingEmissiveMats.push(m);
         }
         m.needsUpdate = true;
       });
     }
   });
 
-  // cm -> m : conversion d'échelle correcte pour un environnement de cette taille
-  const ROOM_SCALE = 0.01;
-  fbx.scale.setScalar(ROOM_SCALE);
-  const box2 = new THREE.Box3().setFromObject(fbx);
+  // Mise à l'échelle : on vise une hauteur cible cohérente avec le reste de la scène
+  const TARGET_HEIGHT = 7;
+  const box = new THREE.Box3().setFromObject(building);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const scale = TARGET_HEIGHT / (size.y || 1);
+  building.scale.setScalar(scale);
+
+  const box2 = new THREE.Box3().setFromObject(building);
   const center2 = new THREE.Vector3(); box2.getCenter(center2);
   const min2 = box2.min;
-  fbx.position.set(-center2.x, -min2.y, -center2.z);
-  scene.add(fbx);
+  building.position.set(-center2.x, -min2.y, -center2.z);
+  scene.add(building);
 
-  if (cribEmissiveMats.length) {
+  if (buildingEmissiveMats.length) {
     animatables.push({
       update(t) {
         const pulse = 0.9 + Math.sin(t * 1.8) * 0.55;
-        cribEmissiveMats.forEach(m => { m.emissiveIntensity = Math.max(0.15, pulse); });
+        buildingEmissiveMats.forEach(m => { m.emissiveIntensity = Math.max(0.15, pulse); });
       }
     });
   }
 
   bumpLoaded();
-}, undefined, (err) => { showError('Impossible de charger ' + PATHS.cribFbx + ' — vérifie l\'arborescence de dossiers.'); bumpLoaded(); });
-
-/* ---------- Load: CLOUDS PACK (fbx, plusieurs meshes statiques) ---------- */
-const cloudsFbxLoader = new THREE.FBXLoader();
-cloudsFbxLoader.load(PATHS.cloudsFbx, (fbx) => {
-  const cloudMat = new THREE.MeshStandardMaterial({
-    color: 0x1c2550, emissive: 0x2a3aa8, emissiveIntensity: 0.35,
-    roughness: 1, metalness: 0, transparent: true, opacity: 0.85,
-  });
-
-  const parts = [];
-  fbx.traverse((o) => { if (o.isMesh) parts.push(o); });
-  const usable = parts.length ? parts : [fbx];
-
-  // Tous les nuages dérivent dans la même direction (le long de l'axe X),
-  // à haute altitude, et ressortent de l'autre côté de l'écran en boucle
-  // au lieu de tourner en orbite chacun à sa vitesse/hauteur.
-  const cloudsGroup = new THREE.Group();
-  const DRIFT_DIR = 1;          // 1 = vers +X (droite), -1 pour l'inverse
-  const DRIFT_SPEED = 0.55;     // vitesse commune à tous les nuages
-  const SPAN_X = 22;            // demi-largeur de la zone de vol (au-delà, on boucle)
-  const BASE_HEIGHT = 6.5;      // altitude de base, bien au-dessus de la scène
-  const chosen = usable.slice(0, 10);
-  chosen.forEach((mesh, i) => {
-    const cloud = mesh.isMesh ? new THREE.Mesh(mesh.geometry, cloudMat.clone()) : mesh;
-    cloud.castShadow = false;
-    cloud.receiveShadow = false;
-
-    const box = new THREE.Box3().setFromObject(cloud);
-    const size = new THREE.Vector3(); box.getSize(size);
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const scale = (1.4 + Math.random() * 1.6) / maxDim;
-    cloud.scale.setScalar(scale);
-    cloud.rotation.y = Math.PI / 2 * DRIFT_DIR; // orienté dans le sens du vol
-
-    // Répartis uniformément sur toute la largeur dès le départ (pas tous groupés au bord)
-    const startX = -SPAN_X + (i / chosen.length) * (SPAN_X * 2) + (Math.random() - 0.5) * 2;
-    const y = BASE_HEIGHT + Math.random() * 2.2;
-    const z = -6 + Math.random() * 12;
-    cloud.position.set(startX, y, z);
-
-    const bobSpeed = 0.15 + Math.random() * 0.15;
-    const bobPhase = i;
-    animatables.push({
-      update(t) {
-        let x = startX + DRIFT_DIR * DRIFT_SPEED * t;
-        // boucle : on ramène le nuage de l'autre côté quand il sort de la zone
-        x = ((x + SPAN_X) % (SPAN_X * 2) + (SPAN_X * 2)) % (SPAN_X * 2) - SPAN_X;
-        cloud.position.x = x;
-        cloud.position.y = y + Math.sin(t * bobSpeed + bobPhase) * 0.25;
-      }
-    });
-
-    cloudsGroup.add(cloud);
-  });
-  scene.add(cloudsGroup);
-  bumpLoaded();
-}, undefined, (err) => { showError('Impossible de charger ' + PATHS.cloudsFbx + ' — vérifie l\'arborescence de dossiers.'); bumpLoaded(); });
+}, undefined, (err) => { showError('Impossible de charger ' + PATHS.buildingGlb + ' — vérifie l\'arborescence de dossiers.'); bumpLoaded(); });
 
 /* ---------- Interaction souris ---------- */
 window.addEventListener('pointermove', (e) => {
@@ -8892,8 +8852,9 @@ window.addEventListener('resize', () => {
 /* ---------- Boucle d'animation ---------- */
 const clock = new THREE.Clock();
 function tick() {
-  const t = clock.getElapsedTime();
-  for (const a of animatables) a.update(t);
+  const delta = clock.getDelta();
+  const t = clock.elapsedTime;
+  for (const a of animatables) a.update(t, delta);
   blueFill.intensity = 5 + Math.sin(t * 1.1) * 1.2;
   cyanRim.intensity = 3.5 + Math.sin(t * 1.4 + 1) * 1.0;
   controls.update();
