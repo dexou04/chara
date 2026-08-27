@@ -8683,6 +8683,9 @@ const CAM = {
   yawSensitivity: 0.0055,
   pitchSensitivity: 0.0045,
   recenterSpeed: 1.4,    // vitesse de recentrage du yaw quand on ne touche plus la souris
+  camSafeLimit: 999,     // distance de collision "lissée" (voir updateChaseCamera) —
+                         // se resserre instantanément contre un mur, mais se
+                         // relâche en douceur pour éviter les tremblements.
 };
 
 // Rayons utilisés chaque frame pour vérifier qu'aucun bâtiment ne se trouve
@@ -8788,17 +8791,29 @@ function updateChaseCamera(delta) {
   if (fullDist > 0.0001) {
     _camDir.normalize();
     const freeDist = cameraFreeDistance(lookAt, _camDir, fullDist);
-    if (freeDist < fullDist) {
-      const safeDist = Math.max(CAM_MIN_DIST_FROM_LOOK, freeDist - CAM_COLLISION_MARGIN);
-      finalDesired = lookAt.clone().addScaledVector(_camDir, safeDist);
+    const rawLimit = freeDist < fullDist
+      ? Math.max(CAM_MIN_DIST_FROM_LOOK, freeDist - CAM_COLLISION_MARGIN)
+      : fullDist;
+    // Se rapprocher d'un obstacle : réaction instantanée (la caméra ne doit
+    // jamais traverser un mur, même une frame). S'en éloigner : relâchement
+    // progressif — sans ça, un petit obstacle qui entre/sort du rayon d'une
+    // frame à l'autre (rambarde d'escalier, bord de marche, coin de toit)
+    // fait "clignoter" la distance et donne l'impression que la caméra
+    // tremble, notamment dans les escaliers.
+    if (rawLimit < CAM.camSafeLimit) {
+      CAM.camSafeLimit = rawLimit;
+    } else {
+      const releaseSmoothing = 1 - Math.exp(-delta * 5);
+      CAM.camSafeLimit += (rawLimit - CAM.camSafeLimit) * releaseSmoothing;
     }
+    finalDesired = lookAt.clone().addScaledVector(_camDir, Math.min(CAM.camSafeLimit, fullDist));
   }
 
-  // Suivi lissé, indépendant du framerate. En collision on suit un peu plus
-  // vite (moins de traînée) pour ne pas laisser la caméra "flotter" un
-  // instant à l'intérieur d'un mur pendant le lerp.
-  const collisionSmoothing = 1 - Math.exp(-delta * 16);
-  const followSmoothing = finalDesired !== desired ? collisionSmoothing : (1 - Math.exp(-delta * 9));
+  // Suivi lissé, indépendant du framerate. Un seul rythme continu (plus de
+  // changement brusque de vitesse selon qu'on est "en collision" ou non,
+  // c'était une autre source de tremblement) : le lissage de camSafeLimit
+  // ci-dessus suffit désormais à absorber les à-coups de collision.
+  const followSmoothing = 1 - Math.exp(-delta * 10);
   camera.position.lerp(finalDesired, followSmoothing);
 
   camera.lookAt(lookAt);
@@ -9053,6 +9068,11 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
   groundRay.far = 40;
   const RAY_HEIGHT = 20;   // on part d'en haut pour être sûr de passer au-dessus de tout
   const MAX_STEP = 0.45;   // dénivelé max franchissable en une fois (escalier = ok, mur = bloqué)
+  const CAT_Y_SMOOTH = 14; // lissage vertical du chat : au lieu de sauter instantanément
+                            // à la hauteur du sol détectée (ce qui tremblote dans les
+                            // escaliers, où le raycast peut légèrement varier d'une
+                            // frame à l'autre entre le nez et l'arrière d'une marche),
+                            // on interpole en douceur vers cette hauteur.
   function groundHeightAt(x, z) {
     groundRay.set(new THREE.Vector3(x, RAY_HEIGHT, z), new THREE.Vector3(0, -1, 0));
     const hits = groundRay.intersectObjects(collidables, true);
@@ -9109,12 +9129,17 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
         if (!wallBlocked && surfaceY !== null && Math.abs(surfaceY - catGroup.position.y) <= MAX_STEP) {
           catGroup.position.x = candX;
           catGroup.position.z = candZ;
-          catGroup.position.y = surfaceY;
+          const ySmooth = 1 - Math.exp(-delta * CAT_Y_SMOOTH);
+          catGroup.position.y += (surfaceY - catGroup.position.y) * ySmooth;
         }
       } else {
-        // À l'arrêt, on recolle quand même le chat au sol (utile juste après le chargement)
+        // À l'arrêt, on recolle quand même le chat au sol (utile juste après le chargement),
+        // avec le même lissage pour éviter un micro-saut si le sol change légèrement.
         const surfaceY = groundHeightAt(catGroup.position.x, catGroup.position.z);
-        if (surfaceY !== null) catGroup.position.y = surfaceY;
+        if (surfaceY !== null) {
+          const ySmooth = 1 - Math.exp(-delta * CAT_Y_SMOOTH);
+          catGroup.position.y += (surfaceY - catGroup.position.y) * ySmooth;
+        }
       }
 
       // Bascule idle <-> marche selon le déplacement
