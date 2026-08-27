@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>Personnage 3D</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #95A8C8;
+    touch-action: none; /* évite le scroll/zoom natif sur mobile pendant l'interaction */
+  }
+  #app {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  /* Écran de chargement */
+  #loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: #95A8C8;
+    z-index: 10;
+    transition: opacity 0.6s ease;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #loading.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .spinner {
+    width: 42px;
+    height: 42px;
+    border: 3px solid rgba(255,255,255,0.35);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loading-text {
+    color: #ffffff;
+    font-size: 14px;
+    letter-spacing: 0.03em;
+    opacity: 0.9;
+  }
+
+  /* petite indication tactile discrète */
+  #hint {
+    position: fixed;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255,255,255,0.85);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    pointer-events: none;
+    transition: opacity 1s ease;
+    z-index: 5;
+  }
+  #hint.hidden { opacity: 0; }
+</style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    <div id="loading-text">Chargement du personnage… 0%</div>
+  </div>
+
+  <div id="hint">Glisser le fond pour tourner · glisser un membre pour le bouger</div>
+
+  <!-- Import map : on charge three.js et ses modules additionnels (FBXLoader, OrbitControls) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+    // ---------------------------------------------------------------
+    // Config
+    // ---------------------------------------------------------------
+    const BACKGROUND_COLOR = 0x95a8c8;
+    const MODEL_URL = "./assets/character.fbx";
+
+    // Palette "figurine" (au lieu des textures d'origine, abîmées) :
+    // corps noir glacé, dégradé vers le bleu sur les extrémités
+    // (bout des oreilles, mains, pieds), à l'image de la référence fournie.
+    const COLOR_BODY = new THREE.Color(0x0c0c0c);
+    const COLOR_TIP = new THREE.Color(0x3f5fd8);
+    // portion (0-1) des vertex les plus "distaux" concernés par le dégradé
+    const GRADIENT_START_PERCENTILE = 0.55;
+    const GRADIENT_END_PERCENTILE = 0.92;
+
+    const container = document.getElementById("app");
+    const loadingEl = document.getElementById("loading");
+    const loadingText = document.getElementById("loading-text");
+    const hintEl = document.getElementById("hint");
+
+    // ---------------------------------------------------------------
+    // Scène / caméra / renderer
+    // ---------------------------------------------------------------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(BACKGROUND_COLOR);
+    // léger brouillard pour fondre les particules lointaines dans le fond
+    scene.fog = new THREE.Fog(BACKGROUND_COLOR, 6, 14);
+
+    const camera = new THREE.PerspectiveCamera(
+      35,
+      container.clientWidth / container.clientHeight,
+      0.1,
+      100
+    );
+    camera.position.set(0, 1.4, 4.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // Environnement de studio : donne des reflets doux et réalistes
+    // au matériau glossy (indispensable pour l'effet "figurine plastique")
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    // ---------------------------------------------------------------
+    // Lumières
+    // ---------------------------------------------------------------
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x6b7aa1, 0.9);
+    scene.add(hemiLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.0);
+    keyLight.position.set(2.5, 4, 3);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(1024, 1024);
+    keyLight.shadow.camera.near = 0.5;
+    keyLight.shadow.camera.far = 12;
+    keyLight.shadow.camera.left = -3;
+    keyLight.shadow.camera.right = 3;
+    keyLight.shadow.camera.top = 3;
+    keyLight.shadow.camera.bottom = -3;
+    keyLight.shadow.bias = -0.0005;
+    scene.add(keyLight);
+
+    const rimLight = new THREE.DirectionalLight(0xcfe0ff, 1.1);
+    rimLight.position.set(-3, 2, -3);
+    scene.add(rimLight);
+
+    const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    fillLight.position.set(-2, 1, 3);
+    scene.add(fillLight);
+
+    // ombre douce au sol (invisible, reçoit juste l'ombre portée)
+    const shadowGround = new THREE.Mesh(
+      new THREE.CircleGeometry(3, 48),
+      new THREE.ShadowMaterial({ opacity: 0.18 })
+    );
+    shadowGround.rotation.x = -Math.PI / 2;
+    shadowGround.position.y = 0;
+    shadowGround.receiveShadow = true;
+    scene.add(shadowGround);
+
+    // ---------------------------------------------------------------
+    // Membres articulés (le FBX n'a pas de squelette : on simule une
+    // vraie chaîne hiérarchique — hanche→genou, épaule→coude, cou —
+    // à partir de points calibrés à la main directement sur le mesh,
+    // au lieu de deviner une zone automatiquement)
+    // ---------------------------------------------------------------
+    const DRAG_SENSITIVITY = 0.012; // radians par pixel glissé
+    const MAX_LIMB_ANGLE = THREE.MathUtils.degToRad(55);
+    const SPRING_SPEED = 9; // vitesse du retour élastique
+
+    // Repère local du FBX : Z est l'axe vertical (confirmé par la bounding
+    // box du mesh : Z va de 0 aux pieds à ~1.9 en haut de la tête).
+    const UP_AXIS = new THREE.Vector3(0, 0, 1);
+
+    // Points cliqués sur le mesh pendant la calibration (espace local du
+    // mesh). Chaque chaîne = [articulation proche du corps, articulation
+    // distale]. Le "cou" n'a qu'une seule articulation (fait basculer
+    // toute la tête/oreilles ensemble).
+    // Rayon de capture autour de l'axe de chaque chaîne : assez large pour
+    // couvrir le membre ENTIER (pied/main/oreille compris), valeurs mesurées
+    // directement sur la géométrie du mesh (voir analyse hors-ligne).
+    const CHAIN_DEFS = [
+      { name: "hanche_gauche", child: "genou_gauche", radius: 0.42, sMin: -0.05 },
+      { name: "hanche_droite", child: "genou_droit", radius: 0.42, sMin: -0.05 },
+      { name: "epaule_gauche", child: "coude_gauche", radius: 0.45, sMin: -0.05 },
+      { name: "epaule_droite", child: "coude_droit", radius: 0.45, sMin: -0.05 },
+      { name: "cou", child: null, radius: 0.90, sMin: -0.14 },
+    ];
+    const CALIBRATED_POINTS = {
+      genou_gauche: new THREE.Vector3(0.11563, -0.06482, 0.38684),
+      genou_droit: new THREE.Vector3(-0.10082, -0.06814, 0.40198),
+      hanche_gauche: new THREE.Vector3(0.08939, -0.07064, 0.51424),
+      hanche_droite: new THREE.Vector3(-0.08397, -0.07663, 0.52264),
+      epaule_gauche: new THREE.Vector3(0.10254, -0.00732, 0.77457),
+      epaule_droite: new THREE.Vector3(-0.09953, -0.00956, 0.77488),
+      coude_gauche: new THREE.Vector3(0.31632, 0.00123, 0.75121),
+      coude_droit: new THREE.Vector3(-0.35283, 0.00026, 0.75139),
+      cou: new THREE.Vector3(0.02064, -0.05691, 0.81782),
+    };
+    const BLEND_ATTACH = 0.045; // zone de transition à l'attache sur le corps
+    const BLEND_JOINT = 0.035;  // zone de transition au genou/coude
+
+    // ---------------------------------------------------------------
+    // Contrôles (rotation à la souris / au doigt)
+    // ---------------------------------------------------------------
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.1, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.enablePan = false;
+    controls.minDistance = 2.2;
+    controls.maxDistance = 7;
+    controls.minPolarAngle = Math.PI * 0.15;
+    controls.maxPolarAngle = Math.PI * 0.85;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.1;
+    controls.update();
+
+    // coupe l'auto-rotation pendant l'interaction, la reprend après un délai
+    let autoRotateTimeout = null;
+    function pauseAutoRotate() {
+      controls.autoRotate = false;
+      hintEl.classList.add("hidden");
+      clearTimeout(autoRotateTimeout);
+      autoRotateTimeout = setTimeout(() => {
+        controls.autoRotate = true;
+      }, 2500);
+    }
+    renderer.domElement.addEventListener("pointerdown", pauseAutoRotate);
+
+    // ---------------------------------------------------------------
+    // Particules brillantes
+    // ---------------------------------------------------------------
+    function createGlowTexture() {
+      const size = 128;
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      const gradient = ctx.createRadialGradient(
+        size / 2, size / 2, 0,
+        size / 2, size / 2, size / 2
+      );
+      gradient.addColorStop(0, "rgba(255,255,255,1)");
+      gradient.addColorStop(0.35, "rgba(255,255,255,0.7)");
+      gradient.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    const PARTICLE_COUNT = 260;
+    const particleGeometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const seeds = new Float32Array(PARTICLE_COUNT); // pour désynchroniser l'animation
+    const radii = new Float32Array(PARTICLE_COUNT);
+    const heights = new Float32Array(PARTICLE_COUNT);
+    const angles = new Float32Array(PARTICLE_COUNT);
+    const sizes = new Float32Array(PARTICLE_COUNT);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = 0.9 + Math.random() * 1.9;
+      const height = Math.random() * 3.0 - 0.2;
+      angles[i] = angle;
+      radii[i] = radius;
+      heights[i] = height;
+      seeds[i] = Math.random() * Math.PI * 2;
+      sizes[i] = 0.02 + Math.random() * 0.05;
+
+      positions[i * 3] = Math.cos(angle) * radius;
+      positions[i * 3 + 1] = height;
+      positions[i * 3 + 2] = Math.sin(angle) * radius;
+    }
+
+    particleGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+    const particleMaterial = new THREE.PointsMaterial({
+      size: 0.06,
+      map: createGlowTexture(),
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      color: 0xffffff,
+      sizeAttenuation: true,
+    });
+
+    const particles = new THREE.Points(particleGeometry, particleMaterial);
+    scene.add(particles);
+
+    // quelques particules plus grosses / plus lumineuses pour la profondeur
+    const sparklePositions = positions; // on réutilise le même tableau de base
+
+    // ---------------------------------------------------------------
+    // Chargement du personnage
+    // ---------------------------------------------------------------
+
+    // Applique le dégradé de couleur noir → bleu (extrémités), inchangé,
+    // indépendant du rig d'articulation.
+    function applyGradientColors(mesh) {
+      const posAttr = mesh.geometry.attributes.position;
+      const count = posAttr.count;
+      const box = new THREE.Box3().setFromBufferAttribute(posAttr);
+      const center = box.getCenter(new THREE.Vector3());
+      const distances = new Float32Array(count);
+      const v = new THREE.Vector3();
+      for (let i = 0; i < count; i++) {
+        v.fromBufferAttribute(posAttr, i).sub(center);
+        distances[i] = v.length();
+      }
+      const sorted = Array.from(distances).sort((a, b) => a - b);
+      const pct = (p) => sorted[Math.min(count - 1, Math.floor(p * (count - 1)))];
+      const startDist = pct(GRADIENT_START_PERCENTILE);
+      const endDist = pct(GRADIENT_END_PERCENTILE);
+      const colors = new Float32Array(count * 3);
+      const tmpColor = new THREE.Color();
+      for (let i = 0; i < count; i++) {
+        const t = THREE.MathUtils.smoothstep(distances[i], startDist, endDist);
+        tmpColor.copy(COLOR_BODY).lerp(COLOR_TIP, t);
+        colors[i * 3] = tmpColor.r; colors[i * 3 + 1] = tmpColor.g; colors[i * 3 + 2] = tmpColor.b;
+      }
+      mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    }
+
+    // Trouve le sommet du mesh le plus proche d'un point donné (permet de
+    // "coller" un point calibré, cliqué sur la surface, à un vrai sommet).
+    function nearestVertexPos(posAttr, point) {
+      let best = -1, bestDist = Infinity;
+      const v = new THREE.Vector3();
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        const d = v.distanceToSquared(point);
+        if (d < bestDist) { bestDist = d; best = i; }
+      }
+      return v.fromBufferAttribute(posAttr, best).clone();
+    }
+
+    // Trouve, pour une chaîne (parent -> enfant), le sommet le plus distal
+    // dans une direction approchée : sert à affiner l'axe réel du membre
+    // (main/pied) plutôt que de se fier à la simple droite parent->enfant.
+    function findFarthestAlong(posAttr, parentPos, dirGuess, radius, sMin) {
+      const v = new THREE.Vector3();
+      const rel = new THREE.Vector3();
+      const perp = new THREE.Vector3();
+      let best = null, bestS = -Infinity;
+      for (let i = 0; i < posAttr.count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        rel.copy(v).sub(parentPos);
+        const s = rel.dot(dirGuess);
+        if (s <= sMin || s <= bestS) continue;
+        perp.copy(rel).addScaledVector(dirGuess, -s);
+        if (perp.length() < radius) { bestS = s; best = v.clone(); }
+      }
+      return best;
+    }
+
+    // Construit le rig hiérarchique complet (hanche->genou, épaule->coude,
+    // cou) à partir des points calibrés à la main, et prépare pour chaque
+    // sommet concerné les poids d'influence de chaque articulation.
+    //
+    // Attribution : chaque sommet est rattaché à LA chaîne dont l'axe est le
+    // plus proche (au lieu du système précédent "premier arrivé, premier
+    // servi" avec un fondu qui coupait le poids près du bord du rayon) —
+    // ça garantit que le membre entier suit d'un bloc, bout d'oreille et
+    // main/pied compris, plutôt que de laisser des sommets orphelins ou
+    // à peine pondérés à l'extrémité.
+    function setupCharacterMesh(mesh) {
+      applyGradientColors(mesh);
+      const geometry = mesh.geometry;
+      const posAttr = geometry.attributes.position;
+      const count = posAttr.count;
+
+      // Snappe chaque point calibré au sommet réel le plus proche
+      const snapped = {};
+      for (const key in CALIBRATED_POINTS) {
+        snapped[key] = nearestVertexPos(posAttr, CALIBRATED_POINTS[key]);
+      }
+
+      const joints = []; // { name, pivot, axisA, axisB, current, target }
+      const chains = CHAIN_DEFS.map((def) => {
+        const parentPos = snapped[def.name];
+        const hasChild = !!def.child;
+        let dir, childS = null;
+
+        if (hasChild) {
+          const childPos = snapped[def.child];
+          const dir0 = childPos.clone().sub(parentPos).normalize();
+          const tip = findFarthestAlong(posAttr, parentPos, dir0, def.radius, def.sMin)
+            || parentPos.clone().addScaledVector(dir0, 0.1);
+          dir = tip.clone().sub(parentPos).normalize();
+          childS = childPos.clone().sub(parentPos).dot(dir);
+        } else {
+          dir = UP_AXIS.clone();
+        }
+
+        const axisA = UP_AXIS.clone();
+        let axisB = new THREE.Vector3().crossVectors(axisA, dir);
+        if (axisB.lengthSq() < 0.02) axisB = new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), dir);
+        axisB.normalize();
+
+        const parentJointIndex = joints.length;
+        joints.push({ name: def.name, pivot: parentPos.clone(), axisA, axisB, current: { yaw: 0, pitch: 0 }, target: { yaw: 0, pitch: 0 } });
+        let childJointIndex = -1;
+        if (hasChild) {
+          childJointIndex = joints.length;
+          joints.push({ name: def.child, pivot: snapped[def.child].clone(), axisA, axisB, current: { yaw: 0, pitch: 0 }, target: { yaw: 0, pitch: 0 } });
+        }
+
+        return { def, parentPos, dir, hasChild, childS, parentJointIndex, childJointIndex };
+      });
+
+      // Compacte en tableaux typés pour la boucle d'animation
+      const activeIndices = [];
+      const parentJoint = new Int16Array(count).fill(-1);
+      const parentWeight = new Float32Array(count);
+      const childJoint = new Int16Array(count).fill(-1);
+      const childWeight = new Float32Array(count);
+
+      const v = new THREE.Vector3();
+      const rel = new THREE.Vector3();
+      const perp = new THREE.Vector3();
+
+      for (let i = 0; i < count; i++) {
+        v.fromBufferAttribute(posAttr, i);
+        let bestChain = -1, bestD = Infinity, bestS = 0;
+        for (let ci = 0; ci < chains.length; ci++) {
+          const c = chains[ci];
+          rel.copy(v).sub(c.parentPos);
+          const s = rel.dot(c.dir);
+          if (s < c.def.sMin) continue;
+          perp.copy(rel).addScaledVector(c.dir, -s);
+          const d = perp.length();
+          if (d > c.def.radius || d >= bestD) continue;
+          bestD = d; bestChain = ci; bestS = s;
+        }
+        if (bestChain === -1) continue; // reste sur le torse, immobile
+
+        const c = chains[bestChain];
+        activeIndices.push(i);
+        parentJoint[i] = c.parentJointIndex;
+        parentWeight[i] = THREE.MathUtils.smoothstep(bestS, c.def.sMin, c.def.sMin + BLEND_ATTACH);
+        if (c.hasChild) {
+          childJoint[i] = c.childJointIndex;
+          childWeight[i] = THREE.MathUtils.smoothstep(bestS, c.childS - BLEND_JOINT, c.childS + BLEND_JOINT);
+        }
+      }
+
+      mesh.userData.rig = {
+        basePositions: Float32Array.from(posAttr.array),
+        joints,
+        activeIndices,
+        parentJoint, parentWeight, childJoint, childWeight,
+        draggingJoint: -1,
+      };
+    }
+
+    // Applique la pose courante du rig aux positions des sommets concernés :
+    // pour chaque sommet, on part de la position de repos, on applique
+    // d'abord la rotation de l'articulation distale (genou/coude) autour de
+    // son pivot de repos, PUIS la rotation de l'articulation proche du corps
+    // (hanche/épaule) autour de son pivot — exactement comme un vrai
+    // squelette hiérarchique (plier la hanche entraîne aussi le genou).
+    const _tmpV = new THREE.Vector3();
+    const _tmpQYaw = new THREE.Quaternion();
+    const _tmpQPitch = new THREE.Quaternion();
+    const _tmpQ = new THREE.Quaternion();
+    function applyJoint(pos, joint, weight) {
+      if (weight < 0.0004) return;
+      _tmpQYaw.setFromAxisAngle(joint.axisA, joint.current.yaw * weight);
+      _tmpQPitch.setFromAxisAngle(joint.axisB, joint.current.pitch * weight);
+      _tmpQ.copy(_tmpQYaw).multiply(_tmpQPitch);
+      pos.sub(joint.pivot).applyQuaternion(_tmpQ).add(joint.pivot);
+    }
+
+    function updateLimbGeometry(mesh) {
+      const rig = mesh.userData.rig;
+      if (!rig) return false;
+
+      const anyActive = rig.joints.some((j) => Math.abs(j.current.yaw) > 0.0004 || Math.abs(j.current.pitch) > 0.0004);
+      if (!anyActive) return false;
+
+      const posAttr = mesh.geometry.attributes.position;
+      for (let k = 0; k < rig.activeIndices.length; k++) {
+        const i = rig.activeIndices[k];
+        _tmpV.set(rig.basePositions[i * 3], rig.basePositions[i * 3 + 1], rig.basePositions[i * 3 + 2]);
+
+        const cj = rig.childJoint[i];
+        if (cj !== -1) applyJoint(_tmpV, rig.joints[cj], rig.childWeight[i]);
+
+        const pj = rig.parentJoint[i];
+        if (pj !== -1) applyJoint(_tmpV, rig.joints[pj], rig.parentWeight[i]);
+
+        posAttr.setXYZ(i, _tmpV.x, _tmpV.y, _tmpV.z);
+      }
+
+      posAttr.needsUpdate = true;
+      mesh.geometry.computeVertexNormals();
+      return true;
+    }
+
+    // Raycasting : détermine quelle articulation (le cas échéant) est sous
+    // le pointeur. Un sommet peut être influencé par 2 articulations (ex :
+    // hanche + genou) ; on choisit celle qui est la plus "engagée" à cet
+    // endroit précis (poids le plus fort) — cliquer près du pied attrape
+    // le genou, cliquer près de la cuisse attrape la hanche.
+    const raycaster = new THREE.Raycaster();
+    const pointerNDC = new THREE.Vector2();
+    function pickLimb(event) {
+      if (!character) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNDC, camera);
+      const hits = raycaster.intersectObject(character, true);
+      if (hits.length === 0 || !hits[0].face) return null;
+      const mesh = hits[0].object;
+      const rig = mesh.userData.rig;
+      if (!rig) return null;
+      const vi = hits[0].face.a;
+      const pj = rig.parentJoint[vi], pw = rig.parentWeight[vi];
+      const cj = rig.childJoint[vi], cw = rig.childWeight[vi];
+      if (pj === -1 && cj === -1) return null;
+      const jointIndex = cw > pw ? cj : pj;
+      if (jointIndex === -1) return null;
+      return { mesh, rig, joint: rig.joints[jointIndex] };
+    }
+
+    let draggingRig = null;
+    let draggingJoint = null;
+    let dragStartX = 0, dragStartY = 0;
+    let dragStartYaw = 0, dragStartPitch = 0;
+
+    renderer.domElement.addEventListener("pointerdown", (event) => {
+      const pick = pickLimb(event);
+      if (pick) {
+        draggingRig = pick.rig;
+        draggingJoint = pick.joint;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        dragStartYaw = draggingJoint.current.yaw;
+        dragStartPitch = draggingJoint.current.pitch;
+        controls.enabled = false;
+        renderer.domElement.setPointerCapture(event.pointerId);
+        renderer.domElement.style.cursor = "grabbing";
+      }
+    });
+
+    renderer.domElement.addEventListener("pointermove", (event) => {
+      if (draggingJoint) {
+        const dx = event.clientX - dragStartX;
+        const dy = event.clientY - dragStartY;
+        const yaw = THREE.MathUtils.clamp(dragStartYaw + dx * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
+        const pitch = THREE.MathUtils.clamp(dragStartPitch - dy * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
+        draggingJoint.current.yaw = yaw;
+        draggingJoint.current.pitch = pitch;
+        draggingJoint.target.yaw = yaw;
+        draggingJoint.target.pitch = pitch;
+      } else if (character) {
+        // survol : curseur "grab" au-dessus d'un membre déplaçable
+        const pick = pickLimb(event);
+        renderer.domElement.style.cursor = pick ? "grab" : "default";
+      }
+    });
+
+    function releaseLimb() {
+      if (draggingJoint) {
+        draggingJoint.target.yaw = 0;
+        draggingJoint.target.pitch = 0;
+        draggingRig = null;
+        draggingJoint = null;
+        controls.enabled = true;
+        renderer.domElement.style.cursor = "default";
+      }
+    }
+    renderer.domElement.addEventListener("pointerup", releaseLimb);
+    renderer.domElement.addEventListener("pointercancel", releaseLimb);
+    renderer.domElement.addEventListener("pointerleave", releaseLimb);
+
+    let character = null;
+    let floatBase = 0;
+
+    const fbxLoader = new FBXLoader();
+    fbxLoader.load(
+      MODEL_URL,
+      (object) => {
+        character = object;
+
+        // Remplace le matériau d'origine (texture patchwork) par un rendu
+        // "figurine" mate : noir + dégradé bleu par vertex colors, et
+        // prépare le rig de membres articulés (drag pour bouger).
+        character.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            setupCharacterMesh(child);
+            child.material = new THREE.MeshStandardMaterial({
+              vertexColors: true,
+              metalness: 0.0,
+              roughness: 0.75,
+              envMapIntensity: 0.5,
+            });
+          }
+        });
+
+        // Centre et met à l'échelle le modèle pour qu'il tienne dans le cadre,
+        // quelle que soit l'échelle d'origine du FBX
+        const box = new THREE.Box3().setFromObject(character);
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        box.getSize(size);
+        box.getCenter(center);
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const targetHeight = 2.1;
+        const scale = targetHeight / maxDim;
+        character.scale.setScalar(scale);
+
+        // recalcule la bounding box après mise à l'échelle pour un centrage précis
+        const box2 = new THREE.Box3().setFromObject(character);
+        const size2 = new THREE.Vector3();
+        const center2 = new THREE.Vector3();
+        box2.getSize(size2);
+        box2.getCenter(center2);
+
+        character.position.x -= center2.x;
+        character.position.z -= center2.z;
+        character.position.y -= box2.min.y; // pose les pieds au sol (y = 0)
+
+        floatBase = character.position.y;
+
+        // recentre la cible des contrôles sur le milieu du personnage
+        controls.target.set(0, size2.y * 0.55, 0);
+        controls.update();
+
+        scene.add(character);
+
+        loadingEl.classList.add("hidden");
+      },
+      (xhr) => {
+        if (xhr.total) {
+          const pct = Math.min(100, Math.round((xhr.loaded / xhr.total) * 100));
+          loadingText.textContent = `Chargement du personnage… ${pct}%`;
+        }
+      },
+      (error) => {
+        console.error("Erreur de chargement du FBX :", error);
+        loadingText.textContent = "Erreur de chargement du modèle.";
+      }
+    );
+
+    // ---------------------------------------------------------------
+    // Boucle d'animation
+    // ---------------------------------------------------------------
+    const clock = new THREE.Clock();
+    let elapsedTime = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const deltaTime = Math.min(0.05, clock.getDelta());
+      elapsedTime += deltaTime;
+      const t = elapsedTime;
+
+      // flottement du personnage
+      if (character) {
+        character.position.y = floatBase + Math.sin(t * 1.2) * 0.06;
+        character.rotation.z = Math.sin(t * 0.8) * 0.015;
+
+        // retour élastique des membres relâchés + application de la pose
+        character.traverse((child) => {
+          if (child.isMesh && child.userData.rig) {
+            const rig = child.userData.rig;
+            const k = 1 - Math.exp(-SPRING_SPEED * deltaTime);
+            for (const joint of rig.joints) {
+              // pendant le drag, current === target déjà (mis à jour dans pointermove),
+              // donc ce lerp ne bouge rien pour l'articulation en cours de manipulation
+              joint.current.yaw += (joint.target.yaw - joint.current.yaw) * k;
+              joint.current.pitch += (joint.target.pitch - joint.current.pitch) * k;
+            }
+            updateLimbGeometry(child);
+          }
+        });
+      }
+
+      // dérive douce des particules (flottement + rotation lente autour du perso)
+      const posAttr = particleGeometry.attributes.position;
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const angle = angles[i] + t * 0.06 * (i % 2 === 0 ? 1 : -1);
+        const bob = Math.sin(t * 0.6 + seeds[i]) * 0.15;
+        posAttr.array[i * 3] = Math.cos(angle) * radii[i];
+        posAttr.array[i * 3 + 1] = heights[i] + bob;
+        posAttr.array[i * 3 + 2] = Math.sin(angle) * radii[i];
+      }
+      posAttr.needsUpdate = true;
+
+      // scintillement léger de l'opacité globale
+      particleMaterial.opacity = 0.75 + Math.sin(t * 2.0) * 0.15;
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // ---------------------------------------------------------------
+    // Responsive
+    // ---------------------------------------------------------------
+    function onResize() {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      camera.aspect = w / h;
+
+      // Sur mobile (portrait), on recule un peu la caméra pour garder
+      // le personnage entier dans le cadre
+      const isPortrait = h > w;
+      camera.position.setLength(isPortrait ? 5.4 : 4.2);
+
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
+    onResize();
+  </script>
+</body>
+</html>
