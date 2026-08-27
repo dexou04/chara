@@ -8648,7 +8648,9 @@ scene.background = new THREE.Color(0x05060f);
 scene.fog = new THREE.FogExp2(0x05060f, 0.028);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.05, 500);
-camera.position.set(9, 5.5, 13);
+// Position de départ proche/zoomée sur le point d'apparition du chat (CAT_SPAWN
+// = 0,1,4 plus bas dans le fichier) : caméra légèrement au-dessus et derrière.
+camera.position.set(1.6, 2.6, 7.1);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -8661,24 +8663,20 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
 const controls = new THREE.OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 2.2, 0);
+// On vise tout de suite le point d'apparition du chat (CAT_SPAWN plus bas)
+// pour démarrer déjà cadré serré dessus, plutôt que sur l'origine de la scène.
+controls.target.set(0, 2, 4);
 controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.minDistance = 2.5;
-controls.maxDistance = 60;
+controls.dampingFactor = 0.08;
+// Distance resserrée : on reste zoomé près du chat en permanence. L'utilisateur
+// garde un peu de marge de zoom (molette) mais ne peut plus s'en éloigner
+// comme avant (l'ancien maxDistance de 60 donnait la vue très large du départ).
+controls.minDistance = 1.6;
+controls.maxDistance = 5.5;
 controls.maxPolarAngle = Math.PI * 0.53;
-controls.enabled = false; // la caméra "chase" ci-dessous pilote la position/rotation à la place
-
-/* ---------- Caméra à la troisième personne : suit le chat en continu, vue de dos ---------- */
-const CHASE = { distance: 2.6, height: 1.35, lookHeight: 0.95, minDist: 1.4, maxDist: 6 };
-window.addEventListener('wheel', (e) => {
-  CHASE.distance = Math.min(CHASE.maxDist, Math.max(CHASE.minDist, CHASE.distance + e.deltaY * 0.0035));
-}, { passive: true });
-function chaseCamTargetPos(pos, rotY) {
-  const behind = new THREE.Vector3(0, CHASE.height, -CHASE.distance);
-  behind.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
-  return new THREE.Vector3().copy(pos).add(behind);
-}
+controls.enabled = true; // orbite (glisser) et zoom (molette) actifs, comme indiqué dans le HUD ;
+// la cible ("target") est recalée en continu sur le chat plus bas (voir controls.target.lerp),
+// donc la caméra le suit automatiquement dans ses déplacements tout en restant zoomée.
 
 /* ---------- Lighting: palette bleu nuit / cyan / rose néon ---------- */
 const ambient = new THREE.AmbientLight(0x1a1f3d, 0.9);
