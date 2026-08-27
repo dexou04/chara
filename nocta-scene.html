@@ -8667,6 +8667,18 @@ controls.dampingFactor = 0.06;
 controls.minDistance = 2.5;
 controls.maxDistance = 60;
 controls.maxPolarAngle = Math.PI * 0.53;
+controls.enabled = false; // la caméra "chase" ci-dessous pilote la position/rotation à la place
+
+/* ---------- Caméra à la troisième personne : suit le chat en continu, vue de dos ---------- */
+const CHASE = { distance: 2.6, height: 1.35, lookHeight: 0.95, minDist: 1.4, maxDist: 6 };
+window.addEventListener('wheel', (e) => {
+  CHASE.distance = Math.min(CHASE.maxDist, Math.max(CHASE.minDist, CHASE.distance + e.deltaY * 0.0035));
+}, { passive: true });
+function chaseCamTargetPos(pos, rotY) {
+  const behind = new THREE.Vector3(0, CHASE.height, -CHASE.distance);
+  behind.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
+  return new THREE.Vector3().copy(pos).add(behind);
+}
 
 /* ---------- Lighting: palette bleu nuit / cyan / rose néon ---------- */
 const ambient = new THREE.AmbientLight(0x1a1f3d, 0.9);
