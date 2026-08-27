@@ -8650,7 +8650,7 @@ scene.fog = new THREE.FogExp2(0x05060f, 0.028);
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.05, 500);
 // Position de départ proche/zoomée sur le point d'apparition du chat (CAT_SPAWN
 // = 0,1,4 plus bas dans le fichier) : caméra légèrement au-dessus et derrière.
-camera.position.set(1.6, 2.6, 7.1);
+camera.position.set(0.9, 1.7, 5.2);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -8669,11 +8669,11 @@ container.appendChild(renderer.domElement);
    tourner), et se recentre automatiquement derrière lui dès qu'on relâche
    le clic. La molette règle la distance de zoom. */
 const CAM = {
-  distance: 3.4,        // distance actuelle caméra <-> chat (molette)
-  minDistance: 1.8,
-  maxDistance: 6.5,
-  baseHeight: 1.25,      // hauteur de la caméra au-dessus du sol du chat
-  lookHeight: 0.42,      // hauteur du point visé, au-dessus du chat (plus bas
+  distance: 1.7,        // distance actuelle caméra <-> chat (molette) — zoomée bcp plus près
+  minDistance: 0.9,
+  maxDistance: 3.2,
+  baseHeight: 0.85,      // hauteur de la caméra au-dessus du sol du chat
+  lookHeight: 0.38,      // hauteur du point visé, au-dessus du chat (plus bas
                          // = le chat remonte à l'écran, plus proche du centre
                          // haut du cadre au lieu du bas)
   yawOffset: 0,          // décalage libre (souris) par rapport à "pile derrière"
@@ -8950,6 +8950,27 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
     return hits.length ? hits[0].point.y : null;
   }
 
+  // Collision horizontale du chat contre les murs/façades/toits (cameraObstacles).
+  // Avant, seul le sol était vérifié (hauteur) : rien n'empêchait le chat de
+  // traverser un mur tant que le raycast vertical trouvait une surface sous
+  // lui (le sol continue sous les bâtiments). On teste maintenant, en plus,
+  // un rayon horizontal devant le chat dans sa direction de déplacement ; si
+  // un obstacle "solide" (mur, façade, toit...) est touché à proximité, on
+  // bloque l'avancée — comme un vrai mur infranchissable.
+  const catWallRay = new THREE.Raycaster();
+  const CAT_WALL_PROBE_HEIGHT = 0.5; // hauteur du rayon par rapport aux pieds du chat
+  const CAT_WALL_MARGIN = 0.28;      // marge de sécurité gardée devant un mur
+  function isWallBlocking(dirX, dirZ, dist) {
+    if (!cameraObstacles.length || dist <= 0) return false;
+    catWallRay.set(
+      new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAT_WALL_PROBE_HEIGHT, catGroup.position.z),
+      new THREE.Vector3(dirX, 0, dirZ)
+    );
+    catWallRay.far = dist + CAT_WALL_MARGIN;
+    const hits = catWallRay.intersectObjects(cameraObstacles, true);
+    return hits.length > 0 && hits[0].distance < dist + CAT_WALL_MARGIN;
+  }
+
   animatables.push({
     update(t, delta) {
       const turning = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
@@ -8959,12 +8980,15 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
       if (moving) {
         const dir = new THREE.Vector3(Math.sin(catGroup.rotation.y), 0, Math.cos(catGroup.rotation.y));
         const step = moving * CAT_MOVE_SPEED * delta;
+        const stepSign = Math.sign(step) || 1;
         const candX = catGroup.position.x + dir.x * step;
         const candZ = catGroup.position.z + dir.z * step;
         const surfaceY = groundHeightAt(candX, candZ);
-        // On n'avance que si une surface existe et que la marche à franchir
-        // n'est pas trop haute (sinon ça fait office de mur infranchissable)
-        if (surfaceY !== null && Math.abs(surfaceY - catGroup.position.y) <= MAX_STEP) {
+        const wallBlocked = isWallBlocking(dir.x * stepSign, dir.z * stepSign, Math.abs(step));
+        // On n'avance que si une surface existe, que la marche à franchir
+        // n'est pas trop haute (sinon ça fait office de mur infranchissable),
+        // ET qu'aucun mur/façade ne bloque la direction visée.
+        if (!wallBlocked && surfaceY !== null && Math.abs(surfaceY - catGroup.position.y) <= MAX_STEP) {
           catGroup.position.x = candX;
           catGroup.position.z = candZ;
           catGroup.position.y = surfaceY;
