@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>NOCTA — Scène Three.js</title>
 <style>
-  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#000000; font-family: 'Segoe UI', system-ui, sans-serif; }
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:#04050c; font-family: 'Segoe UI', system-ui, sans-serif; }
   #app { position:relative; width:100%; height:100%; }
   canvas { display:block; touch-action:none; }
   #hud {
@@ -8638,7 +8638,7 @@ version 0.6.9
 
 const PATHS = {
   catGlb:      'assets/tuxedo_cat_animated_2.0.glb',
-  buildingGlb: 'assets/dragon_gate_inn_with_neon.glb',
+  buildingGlb: 'assets/tanabata_evening.glb',
 };
 
 /* ---------- Scene / camera / renderer ---------- */
@@ -8739,10 +8739,12 @@ let catGroup = null;
 let idleAction = null, walkAction = null;
 const CAT_MOVE_SPEED = 2.2;   // unités/seconde
 const CAT_TURN_SPEED = 2.6;   // radians/seconde
-// Point d'apparition estimé (zone entourée à l'avant-gauche du bâtiment).
-// À ajuster toi-même si besoin en regardant la scène en direct — je n'ai
-// pas de moyen de vérifier les coordonnées exactes du modèle depuis une capture.
-const CAT_SPAWN = { x: 1.4, y: 0.15, z: 2.6 };
+// Point d'apparition : je n'ai pas de vue de la scène tanabata pour viser un
+// trottoir précis, donc je pars du centre (le raycast de collision le recale
+// de toute façon sur la première surface marchable trouvée sous lui, y
+// compris le sol de secours si rien n'est détecté). Ajuste x/z toi-même en
+// te baladant si tu veux qu'il démarre à un endroit précis.
+const CAT_SPAWN = { x: 0, y: 1, z: 4 };
 
 const keys = { forward: false, backward: false, left: false, right: false };
 window.addEventListener('keydown', (e) => {
@@ -8856,15 +8858,18 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
 
 
 
-/* ---------- Load: CRIB (fbx, environnement complet ~8m, 115 meshes) ----------
-   Analyse : ce fichier n'est pas un simple accessoire mais une scène/pièce
-   entière. On la remplace ici par le portail "Dragon Gate Inn" (glb,
-   déjà à une échelle raisonnable en mètres — pas de conversion cm->m
-   nécessaire, contrairement à l'ancien Crib.fbx). */
+/* ---------- Load: TANABATA — scène de ville façon Kyoto (glb, ~630 meshes) ----------
+   Remplace le portail "Dragon Gate Inn". Vu le nombre de meshes, on ne met
+   dans les collisions QUE ceux qui sont réellement marchables (trottoirs,
+   routes, escaliers, ponts, herbe, bords de quai...) repérés par leur nom
+   — pas les murs, toits, lanternes, arbres, véhicules etc. Ça évite que le
+   chat grimpe sur un toit et garde le raycast de collision rapide. */
 const buildingLoader = new THREE.GLTFLoader();
 let buildingEmissiveMats = [];
+const WALKABLE_NAME_RE = /pavement|sidewalk|road|stair|bridge|border|concreteblock|ground|grass|asphalt/i;
 buildingLoader.load(PATHS.buildingGlb, (gltf) => {
   const building = gltf.scene;
+  const walkableMeshes = [];
   building.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
@@ -8880,6 +8885,7 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
         }
         m.needsUpdate = true;
       });
+      if (o.name && WALKABLE_NAME_RE.test(o.name)) walkableMeshes.push(o);
     }
   });
 
@@ -8895,7 +8901,11 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
   const min2 = box2.min;
   building.position.set(-center2.x, -min2.y, -center2.z);
   scene.add(building);
-  collidables.push(building);
+
+  // Seuls les meshes "marchables" repérés ci-dessus entrent dans les collisions
+  // du chat (le reste de la ville reste purement visuel).
+  collidables.push(...walkableMeshes);
+  console.log('[collisions] meshes marchables détectés :', walkableMeshes.length, walkableMeshes.map(m => m.name));
 
   if (buildingEmissiveMats.length) {
     animatables.push({
