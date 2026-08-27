@@ -1,760 +1,3870 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-<title>Personnage 3D</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>UNKNOWN — Discovery</title>
 <style>
-  html, body {
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    background: #95A8C8;
-    touch-action: none; /* évite le scroll/zoom natif sur mobile pendant l'interaction */
-  }
-  #app {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-  }
-  canvas {
-    display: block;
-    width: 100% !important;
-    height: 100% !important;
-  }
+/* ============================================================
+   DESIGN TOKENS
+   Tweak the palette here — everything else references these vars.
+============================================================ */
+:root {
+  --bg:        #050509;   /* deep near-black base */
+  --night:     #0a0e22;   /* blue-night undertone */
+  --violet:    #8b5cf6;
+  --magenta:   #d946ef;
+  --pink:      #ec4899;
+  --orange:    #ff8a3d;
+  --gold:      #f5c56b;
+  --cyan:      #5ee7ff;
 
-  /* Écran de chargement */
-  #loading {
-    position: fixed;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 14px;
-    background: #95A8C8;
-    z-index: 10;
-    transition: opacity 0.6s ease;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  #loading.hidden {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .spinner {
-    width: 42px;
-    height: 42px;
-    border: 3px solid rgba(255,255,255,0.35);
-    border-top-color: #ffffff;
-    border-radius: 50%;
-    animation: spin 0.9s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  #loading-text {
-    color: #ffffff;
-    font-size: 14px;
-    letter-spacing: 0.03em;
-    opacity: 0.9;
-  }
+  --text:      rgba(255, 255, 255, 0.82);
+  --text-dim:  rgba(255, 255, 255, 0.38);
+  --text-faint:rgba(255, 255, 255, 0.16);
 
-  /* petite indication tactile discrète */
-  #hint {
-    position: fixed;
-    bottom: max(18px, env(safe-area-inset-bottom));
-    left: 50%;
-    transform: translateX(-50%);
-    color: rgba(255,255,255,0.85);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    font-size: 12px;
-    letter-spacing: 0.04em;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.25);
-    pointer-events: none;
-    transition: opacity 1s ease;
-    z-index: 5;
-  }
-  #hint.hidden { opacity: 0; }
+  --ui-gap: clamp(20px, 4vw, 48px);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  cursor: none; /* replaced by custom cursor */
+}
+
+/* ============================================================
+   BACKGROUND — LAYER 1: base gradient
+============================================================ */
+.bg-base {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(ellipse at 50% 40%, var(--night) 0%, var(--bg) 55%, #020203 100%);
+}
+
+/* ============================================================
+   BACKGROUND — LAYER 2/3: large blurred color halos
+   These are the "halos, lumières et gradients" the brief asks for
+   instead of flat color blocks. All motion is slow + subtle.
+============================================================ */
+.bg-halos {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  mix-blend-mode: screen;
+  opacity: 0.75;
+}
+
+.halo {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.35;
+  will-change: transform;
+}
+
+.halo-violet {
+  width: 60vw; height: 60vw;
+  top: -10vw; left: -15vw;
+  background: radial-gradient(circle, var(--violet), transparent 70%);
+  animation: drift-a 46s ease-in-out infinite;
+}
+
+.halo-orange {
+  width: 45vw; height: 45vw;
+  bottom: -10vw; right: -10vw;
+  background: radial-gradient(circle, var(--orange), transparent 70%);
+  animation: drift-b 58s ease-in-out infinite;
+  opacity: 0.28;
+}
+
+.halo-pink {
+  width: 40vw; height: 40vw;
+  top: 30vh; right: 5vw;
+  background: radial-gradient(circle, var(--pink), transparent 70%);
+  animation: drift-c 64s ease-in-out infinite;
+  opacity: 0.22;
+}
+
+.halo-cyan {
+  width: 30vw; height: 30vw;
+  bottom: 10vh; left: 10vw;
+  background: radial-gradient(circle, var(--cyan), transparent 70%);
+  animation: drift-a 70s ease-in-out infinite reverse;
+  opacity: 0.16;
+}
+
+@keyframes drift-a {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(4vw, 3vh) scale(1.08); }
+}
+@keyframes drift-b {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-3vw, -4vh) scale(1.05); }
+}
+@keyframes drift-c {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50%      { transform: translate(-2vw, 3vh) scale(0.95); }
+}
+
+/* ============================================================
+   BACKGROUND — vignette + film grain (very subtle depth cues)
+============================================================ */
+.bg-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.55) 100%);
+}
+
+.bg-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ============================================================
+   V3 — FLASH OVERLAY (zone transitions)
+============================================================ */
+.flash-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, #eaf6ff 0%, #9fd8ff 55%, #5ee7ff 100%);
+}
+
+/* ============================================================
+   CANVAS (three.js render target)
+============================================================ */
+#scene {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none; /* we handle drag/pinch manually */
+}
+
+/* ============================================================
+   UI LAYER — minimal, quiet, corner-anchored
+============================================================ */
+.ui-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.ui-corner {
+  position: absolute;
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.ui-top-left    { top: var(--ui-gap); left: var(--ui-gap); }
+.ui-top-right   { top: var(--ui-gap); right: var(--ui-gap); }
+.ui-bottom-left { bottom: var(--ui-gap); left: var(--ui-gap); }
+.ui-bottom-right{ bottom: var(--ui-gap); right: var(--ui-gap); }
+
+.ui-fragment {
+  color: var(--gold);
+  opacity: 0.75;
+  letter-spacing: 0.15em;
+}
+
+.ui-logo {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.4em;
+  opacity: 0.9;
+}
+
+.ui-index {
+  transition: opacity 0.6s ease;
+}
+
+.ui-hint {
+  transition: opacity 1.2s ease;
+}
+.ui-hint.hidden {
+  opacity: 0;
+}
+
+.ui-center-message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -40%);
+  font-size: 13px;
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-shadow: 0 0 20px rgba(245, 197, 107, 0.6);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 2.2s ease, transform 2.2s ease;
+}
+.ui-center-message.show {
+  opacity: 0.9;
+  transform: translate(-50%, -50%);
+}
+
+/* ============================================================
+   CUSTOM CURSOR
+============================================================ */
+.cursor-dot,
+.cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 999;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  will-change: transform;
+}
+
+.cursor-dot {
+  width: 4px;
+  height: 4px;
+  background: var(--text);
+  box-shadow: 0 0 6px rgba(255,255,255,0.8);
+}
+
+.cursor-ring {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--text-faint);
+  transition: width 0.25s ease, height 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.cursor-ring.hover {
+  width: 54px;
+  height: 54px;
+  border-color: var(--cyan);
+  box-shadow: 0 0 24px rgba(94, 231, 255, 0.35);
+}
+
+.cursor-ring.press {
+  width: 22px;
+  height: 22px;
+}
+
+/* V3 — dragging a constellation connection */
+.cursor-ring.connecting {
+  border-color: var(--cyan);
+  box-shadow: 0 0 18px rgba(94, 231, 255, 0.5);
+  width: 16px;
+  height: 16px;
+}
+
+/* V4 — gravity zone: attract (default hover) vs repulse (shift held) */
+.cursor-ring.repulse {
+  border-color: var(--orange);
+  box-shadow: 0 0 18px rgba(255, 138, 61, 0.55);
+}
+.cursor-ring.repulse::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 138, 61, 0.35);
+}
+
+/* V2 — hold-to-charge progress ring (section 14/19) */
+.cursor-ring.charging {
+  --charge: 0;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+.cursor-ring.charging::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  padding: 2px;
+  background: conic-gradient(var(--gold) calc(var(--charge) * 360deg), transparent 0);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+/* ripple spawned on click, appended/removed via JS */
+.cursor-ripple {
+  position: fixed;
+  z-index: 998;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.5);
+  transform: translate(-50%, -50%);
+  animation: ripple-out 0.7s ease-out forwards;
+}
+@keyframes ripple-out {
+  from { width: 6px;  height: 6px;  opacity: 0.8; }
+  to   { width: 90px; height: 90px; opacity: 0; }
+}
+
+/* touch devices: no hover-capable custom cursor */
+@media (hover: none) {
+  .cursor-dot, .cursor-ring { display: none; }
+  html, body { cursor: auto; }
+}
+
+@media (max-width: 640px) {
+  .ui-corner { font-size: 9.5px; letter-spacing: 0.22em; }
+}
+
+/* reduced motion: calm the background, keep it static */
+@media (prefers-reduced-motion: reduce) {
+  .halo { animation: none !important; }
+}
+
 </style>
 </head>
 <body>
-  <div id="app"></div>
 
-  <div id="loading">
-    <div class="spinner"></div>
-    <div id="loading-text">Chargement du personnage… 0%</div>
+  <!-- ============================================================
+       BACKGROUND LAYERS (pure CSS — cheap, always-on, GPU friendly)
+       These sit behind the WebGL canvas and give the deep, slowly
+       breathing color field described in the brief. Edit the halo
+       positions/colors in style.css under "BACKGROUND HALOS".
+  ============================================================ -->
+  <div class="bg-base"></div>
+  <div class="bg-halos">
+    <span class="halo halo-violet"></span>
+    <span class="halo halo-orange"></span>
+    <span class="halo halo-pink"></span>
+    <span class="halo halo-cyan"></span>
+  </div>
+  <div class="bg-vignette"></div>
+  <div class="bg-grain"></div>
+
+  <!-- ============================================================
+       FLASH OVERLAY — used by the V3 hub↔constellation zone
+       transition; opacity driven per-frame from script.js.
+  ============================================================ -->
+  <div class="flash-overlay" id="flash-overlay"></div>
+
+  <!-- ============================================================
+       WEBGL CANVAS — everything 3D (planet, particles, nodes, rings)
+       lives here, drawn by script.js / three.js
+  ============================================================ -->
+  <canvas id="scene"></canvas>
+
+  <!-- ============================================================
+       MINIMAL UI — no navbar, no cards, no marketing sections.
+       Just three quiet labels, as specified.
+  ============================================================ -->
+  <div class="ui-layer">
+    <div class="ui-corner ui-top-left">
+      <span class="ui-logo">UNKNOWN</span>
+    </div>
+
+    <div class="ui-corner ui-bottom-left">
+      <span class="ui-index" id="progress-index">01 / DISCOVERY</span>
+    </div>
+
+    <div class="ui-corner ui-bottom-right">
+      <span class="ui-hint" id="drag-hint">DRAG TO EXPLORE</span>
+    </div>
+
+    <div class="ui-corner ui-top-right">
+      <span class="ui-fragment" id="fragment-index">&#9704; 00</span>
+    </div>
+
+    <div class="ui-center-message" id="unlock-message">DISCOVERY&nbsp;COMPLETE</div>
   </div>
 
-  <div id="hint">Glisser le fond pour tourner · glisser un membre pour le bouger</div>
+  <!-- ============================================================
+       CUSTOM CURSOR — replaces the system cursor with a dot + ring.
+       Position is driven from script.js via CSS transforms.
+  ============================================================ -->
+  <div class="cursor-ring" id="cursor-ring"></div>
+  <div class="cursor-dot" id="cursor-dot"></div>
 
-  <!-- Import map : on charge three.js et ses modules additionnels (FBXLoader, OrbitControls) -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  <!-- three.js via CDN (r128 pinned for stability) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+/* ================================================================
+   UNKNOWN — first hub page
+   ----------------------------------------------------------------
+   Everything here is procedural: no external 3D assets, only
+   three.js primitives + canvas-free materials.
+
+   QUICK CUSTOMIZATION — everything lives in CONFIG below:
+     - planet color / size          -> CONFIG.planet
+     - number of particles          -> CONFIG.particles
+     - number of discovery nodes    -> CONFIG.nodes.count
+     - rotation speed / damping     -> CONFIG.rotation
+     - glow strength                -> CONFIG.planet.glowOpacity
+     - zoom distances               -> CONFIG.camera
+     - ring colors / speeds         -> CONFIG.rings
+================================================================ */
+
+const CONFIG = {
+  planet: {
+    radius: 4.2,
+    detail: 2,                 // icosahedron subdivision — higher = smoother
+    color: 0x14101f,           // dark body
+    emissive: 0x2a1440,
+    glowColor: 0x8b5cf6,
+    glowScale: 1.18,
+    glowOpacity: 0.28,
+  },
+  rings: [
+    { radius: 6.4, width: 0.045, color: 0xec4899, opacity: 0.35, tiltX: 1.15, tiltZ: 0.25, speed: 0.02 },
+    { radius: 7.3, width: 0.02,  color: 0x5ee7ff, opacity: 0.18, tiltX: -0.6, tiltZ: 1.0,  speed: -0.014 },
+    { radius: 8.1, width: 0.06,  color: 0xff8a3d, opacity: 0.12, tiltX: 0.3,  tiltZ: -0.9, speed: 0.009 },
+  ],
+  particles: {
+    farCount: 1600,   // distant starfield
+    farSpread: 90,
+    nearCount: 260,   // interactive particles orbiting the planet
+    nearMinR: 5.6,
+    nearMaxR: 9.5,
+  },
+  nodes: {
+    count: 9,          // discovery points on the planet (7–12 per brief)
+    orbitRadius: 4.45,  // just above the planet surface
+    color: 0x5ee7ff,
+    activeColor: 0xf5c56b,
+  },
+  rotation: {
+    dragSensitivity: 0.006,
+    damping: 0.94,        // inertia decay per frame after release
+    idleSpeed: 0.0006,    // very slow autonomous drift when idle
+  },
+  camera: {
+    startDistance: 13,
+    minDistance: 4.5,   // lowered in V2 so the zoom-reveal tiers are reachable
+    maxDistance: 22,
+    zoomLerp: 0.08,
+    zoomStep: 0.0016,      // wheel sensitivity
+  },
+  parallax: {
+    strength: 0.6,
+    lerp: 0.05,
+  },
+
+  /* ----------------------------------------------------------
+     V2 — system objects around the planet.
+     Everything under `objects` is a reusable createOrbitalObject()
+     call — copy a block to add a new orbiting object later.
+  ---------------------------------------------------------- */
+  objects: {
+    fragment: {
+      position: [5.6, 2.1, -3.2],
+      radius: 0.26,
+      color: 0xec4899,
+      glowColor: 0xff9ad1,
+      orbitRadius: 0.5,
+      orbitSpeed: 0.35,
+    },
+    secondary: {
+      position: [-8.2, -1.4, 4.6],
+      radius: 0.85,
+      color: 0x1a1330,
+      glowColor: 0x8b5cf6,
+      orbitRadius: 0.25,
+      orbitSpeed: 0.12,
+    },
+    mystery: {
+      position: [-3.4, 4.8, 5.5],
+      radius: 0.1,
+      color: 0xffffff,
+      glowColor: 0x5ee7ff,
+      orbitRadius: 0.35,
+      orbitSpeed: 0.5,
+    },
+  },
+  shard: {
+    position: [3.0, -3.4, 2.6],
+    radius: 0.22,
+    color: 0xf5c56b,
+  },
+  portal: {
+    position: [0, -1.5, -9],
+    radius: 2.1,
+    width: 0.12,
+    color: 0x5ee7ff,
+    tiltX: 0.25,
+    idleSpeed: 0.0015,
+    activeSpeed: 0.01,
+  },
+  charge: {
+    holdDuration: 1.1,      // seconds to hold before activation
+    cancelDrift: 60,        // px pointer can move before charge cancels
+  },
+  world: {
+    // thresholds that drive visible changes to the whole scene (section 16)
+    moreParticlesAt: 3,
+    brighterRingsAt: 5,
+  },
+  microZoom: {
+    closeAt: 9.5,   // distance below which microStructures become visible
+    veryCloseAt: 6.2, // distance below which the interactive symbol appears
+  },
+
+  /* ----------------------------------------------------------
+     V3 — the Constellation zone
+  ---------------------------------------------------------- */
+  constellation: {
+    pointCount: 14,
+    fieldRadius: 8.5,
+    coreRadius: 0.55,
+    color: 0x9fd8ff,
+    coreColor: 0x5ee7ff,
+    // correct pairs to connect — indices into the generated points array
+    solution: [
+      [1, 4], [4, 7], [7, 10], [10, 13], [2, 9], [9, 12], [0, 6],
+    ],
+    connectSnapRadius: 0.9,   // world-space release tolerance
+    cameraStart: 16,
+    cameraIdleSpeed: 0.00035,
+  },
+
+  /* ----------------------------------------------------------
+     V4 — the Gravity zone
+  ---------------------------------------------------------- */
+  gravityGate: {
+    // the hub object that opens the Gravity zone
+    position: [7.5, -3.2, -4.5],
+    radius: 0.4,
+    color: 0x1a0f08,
+    glowColor: 0xff8a3d,
+    unlockAt: 5,   // gameState.discoveries needed before it appears
+  },
+  gravity: {
+    cameraStart: 15,
+    coreRadius: 1.5,
+    coreColor: 0xff8a3d,
+    coreMass: 26,
+    G: 1.0,
+    friction: 0.18,          // velocity lost per second (exponential)
+    nucleusCount: 6,
+    orbitRings: [
+      { radius: 3.4, tiltX: 0.15, tiltZ: 0 },
+      { radius: 4.8, tiltX: -0.35, tiltZ: 0.25 },
+      { radius: 6.2, tiltX: 0.5, tiltZ: -0.2 },
+    ],
+    orbitRadiusTolerance: 0.55,
+    orbitSpeedTolerance: 0.4,     // fraction of ideal speed
+    lockDuration: 1.3,             // seconds sustained before locking
+    cursorFieldRadius: 3.0,
+    cursorFieldStrength: 5.5,
+    mergeFactor: 1.15,
+    secretHoldRadius: 1.0,
+    secretRequiredCount: 3,
+  },
+};
+
+/* ================================================================
+   GAME STATE — intentionally not surfaced as a big score UI
+================================================================ */
+const gameState = {
+  discoveredNodes: [],
+  energy: 0,
+  discoveries: 0,
+  unlocked: false,
+  crystalCollected: false,
+  // V2 additions
+  collectedFragments: 0,
+  unlockedZones: [],
+  portalActive: false,
+  secretZoneRevealed: false,
+  // V3 additions
+  collectedCores: 0,
+  constellationProgress: [],
+  secretsFound: [],
+  currentZone: 'hub',
+  // V4 additions
+  collectedGravitySeeds: 0,
+  gravityUnlocked: false,
+};
+
+/* ================================================================
+   RENDERER / SCENE / CAMERA
+================================================================ */
+let renderer, scene, camera;
+let clock;
+
+function initRenderer() {
+  const canvas = document.getElementById('scene');
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000, 0);
+}
+
+function initScene() {
+  scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x050509, 0.018);
+}
+
+function initCamera() {
+  camera = new THREE.PerspectiveCamera(
+    50,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    200
+  );
+  camera.position.set(0, 0, CONFIG.camera.startDistance);
+}
+
+/* ================================================================
+   LIGHTING — warm orange + violet + a touch of cyan, per brief
+================================================================ */
+function initLights() {
+  const ambient = new THREE.AmbientLight(0x261a3a, 0.6);
+  scene.add(ambient);
+
+  const warm = new THREE.PointLight(0xff8a3d, 2.2, 40);
+  warm.position.set(8, 4, 6);
+  scene.add(warm);
+
+  const violet = new THREE.PointLight(0x8b5cf6, 2.0, 40);
+  violet.position.set(-7, -3, 5);
+  scene.add(violet);
+
+  const cyan = new THREE.PointLight(0x5ee7ff, 1.0, 30);
+  cyan.position.set(0, 6, -6);
+  scene.add(cyan);
+}
+
+/* ================================================================
+   PLANET — body + glow shell + faceted "energy surface"
+================================================================ */
+let hubGroup;           // V3: everything belonging to the hub zone lives here
+let worldGroup;        // V2: everything that orbits together rotates via this group
+let planetGroup;       // the planet itself, nested inside worldGroup
+let planetMesh, glowMesh;
+let nodeMeshes = [];
+let ringMeshes = [];
+
+function initWorldGroup() {
+  hubGroup = new THREE.Group();
+  scene.add(hubGroup);
+
+  worldGroup = new THREE.Group();
+  hubGroup.add(worldGroup);
+}
+
+function createPlanet() {
+  planetGroup = new THREE.Group();
+
+  const geo = new THREE.IcosahedronGeometry(CONFIG.planet.radius, CONFIG.planet.detail);
+  const mat = new THREE.MeshStandardMaterial({
+    color: CONFIG.planet.color,
+    emissive: CONFIG.planet.emissive,
+    emissiveIntensity: 0.6,
+    metalness: 0.35,
+    roughness: 0.55,
+    flatShading: true, // keeps the faceted, energy-like look without external textures
+  });
+  planetMesh = new THREE.Mesh(geo, mat);
+  planetGroup.add(planetMesh);
+
+  // glow shell — additive, back-side, larger radius
+  const glowGeo = new THREE.IcosahedronGeometry(
+    CONFIG.planet.radius * CONFIG.planet.glowScale,
+    1
+  );
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: CONFIG.planet.glowColor,
+    transparent: true,
+    opacity: CONFIG.planet.glowOpacity,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  glowMesh = new THREE.Mesh(glowGeo, glowMat);
+  planetGroup.add(glowMesh);
+
+  worldGroup.add(planetGroup);
+}
+
+function createRings() {
+  CONFIG.rings.forEach((cfg) => {
+    const geo = new THREE.RingGeometry(cfg.radius, cfg.radius + cfg.width, 128);
+    const mat = new THREE.MeshBasicMaterial({
+      color: cfg.color,
+      transparent: true,
+      opacity: cfg.opacity,
+      side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x = cfg.tiltX;
+    mesh.rotation.z = cfg.tiltZ;
+    mesh.userData.speed = cfg.speed;
+    mesh.userData.baseOpacity = cfg.opacity;
+    planetGroup.add(mesh);
+    ringMeshes.push(mesh);
+  });
+}
+
+/* ================================================================
+   DISCOVERY NODES — the first mini-game
+   Distributed with a Fibonacci sphere for even, natural spacing.
+================================================================ */
+function createNodes() {
+  const n = CONFIG.nodes.count;
+  const r = CONFIG.nodes.orbitRadius;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const radiusAtY = Math.sqrt(1 - y * y);
+    const theta = golden * i;
+    const x = Math.cos(theta) * radiusAtY;
+    const z = Math.sin(theta) * radiusAtY;
+
+    const pos = new THREE.Vector3(x, y, z).multiplyScalar(r);
+
+    const geo = new THREE.SphereGeometry(0.09, 12, 12);
+    const mat = new THREE.MeshBasicMaterial({
+      color: CONFIG.nodes.color,
+      transparent: true,
+      opacity: 0.35, // discreet at first, per brief
+    });
+    const node = new THREE.Mesh(geo, mat);
+    node.position.copy(pos);
+    node.userData.discovered = false;
+    node.userData.id = i;
+    node.userData.baseScale = 1;
+
+    // tiny halo sprite so undiscovered nodes still read as "something"
+    const haloMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(),
+      color: CONFIG.nodes.color,
+      transparent: true,
+      opacity: 0.25,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const halo = new THREE.Sprite(haloMat);
+    halo.scale.set(0.5, 0.5, 0.5);
+    node.add(halo);
+    node.userData.halo = halo;
+
+    planetGroup.add(node);
+    nodeMeshes.push(node);
+  }
+}
+
+// small radial-gradient texture used for soft glows/halos (no external files)
+let glowTextureCache = null;
+function makeGlowTexture() {
+  if (glowTextureCache) return glowTextureCache;
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(
+    size / 2, size / 2, 0,
+    size / 2, size / 2, size / 2
+  );
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.4, 'rgba(255,255,255,0.4)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  glowTextureCache = new THREE.CanvasTexture(canvas);
+  return glowTextureCache;
+}
+
+/* ================================================================
+   PARTICLES
+   - far: static-feeling distant starfield (depth cue, not interactive)
+   - near: orbiting field around the planet, reacts to cursor + clicks
+================================================================ */
+let farParticles, nearParticles;
+let nearVelocities; // small outward "settle back" velocities for burst effect
+
+function createFarParticles() {
+  const count = CONFIG.particles.farCount;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = CONFIG.particles.farSpread * (0.4 + Math.random() * 0.6);
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xbfd4ff,
+    size: 0.045,
+    transparent: true,
+    opacity: 0.55,
+    sizeAttenuation: true,
+  });
+  farParticles = new THREE.Points(geo, mat);
+  hubGroup.add(farParticles);
+}
+
+function createNearParticles() {
+  const count = CONFIG.particles.nearCount;
+  const positions = new Float32Array(count * 3);
+  const basePositions = new Float32Array(count * 3);
+  nearVelocities = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i++) {
+    const r = THREE.MathUtils.lerp(
+      CONFIG.particles.nearMinR,
+      CONFIG.particles.nearMaxR,
+      Math.random()
+    );
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const x = r * Math.sin(phi) * Math.cos(theta);
+    const y = r * Math.sin(phi) * Math.sin(theta);
+    const z = r * Math.cos(phi);
+    positions[i * 3] = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+    basePositions[i * 3] = x;
+    basePositions[i * 3 + 1] = y;
+    basePositions[i * 3 + 2] = z;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.userData.base = basePositions;
+
+  const mat = new THREE.PointsMaterial({
+    color: 0xffe3c2,
+    size: 0.07,
+    transparent: true,
+    opacity: 0.7,
+    sizeAttenuation: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  nearParticles = new THREE.Points(geo, mat);
+  hubGroup.add(nearParticles);
+}
+
+/* ================================================================
+   CRYSTAL — the small collectible revealed after unlock
+================================================================ */
+let crystalGroup = null;
+
+function createCrystal() {
+  crystalGroup = new THREE.Group();
+
+  const geo = new THREE.IcosahedronGeometry(0.35, 0);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xf5c56b,
+    emissive: 0xff8a3d,
+    emissiveIntensity: 0.9,
+    metalness: 0.2,
+    roughness: 0.2,
+    flatShading: true,
+  });
+  const core = new THREE.Mesh(geo, mat);
+  crystalGroup.add(core);
+
+  const glowGeo = new THREE.IcosahedronGeometry(0.55, 1);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0xffd68a,
+    transparent: true,
+    opacity: 0.35,
+    blending: THREE.AdditiveBlending,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  crystalGroup.add(new THREE.Mesh(glowGeo, glowMat));
+
+  crystalGroup.position.set(
+    CONFIG.planet.radius * 1.9,
+    CONFIG.planet.radius * 0.6,
+    CONFIG.planet.radius * 0.9
+  );
+  crystalGroup.scale.set(0, 0, 0); // hidden until unlock
+  crystalGroup.userData.collected = false;
+  crystalGroup.userData.spawnTime = null;
+
+  hubGroup.add(crystalGroup);
+}
+
+/* ================================================================
+   V2 — REUSABLE OBJECT FACTORY
+   Every new orbiting object (fragment, secondary sphere, mystery
+   light, and future additions) is built from this one function:
+   a core mesh + additive glow shell + soft sprite halo.
+   To add a brand new object later, just add a config block under
+   CONFIG.objects and call createOrbitalObject() with it.
+================================================================ */
+let orbitalGroup;               // holds fragment / secondary / mystery
+const orbitalObjects = {};      // keyed by name for easy lookup
+
+function initOrbitalGroup() {
+  orbitalGroup = new THREE.Group();
+  worldGroup.add(orbitalGroup);
+}
+
+function createOrbitalObject(name, opts) {
+  const group = new THREE.Group();
+
+  const geo = new THREE.IcosahedronGeometry(opts.radius, 0);
+  const mat = new THREE.MeshStandardMaterial({
+    color: opts.color,
+    emissive: opts.glowColor,
+    emissiveIntensity: 0.7,
+    metalness: 0.3,
+    roughness: 0.4,
+    flatShading: true,
+  });
+  const core = new THREE.Mesh(geo, mat);
+  group.add(core);
+
+  const glowGeo = new THREE.IcosahedronGeometry(opts.radius * 2.1, 1);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: opts.glowColor,
+    transparent: true,
+    opacity: 0.32,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  group.add(new THREE.Mesh(glowGeo, glowMat));
+
+  const haloMat = new THREE.SpriteMaterial({
+    map: makeGlowTexture(),
+    color: opts.glowColor,
+    transparent: true,
+    opacity: 0.3,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const halo = new THREE.Sprite(haloMat);
+  halo.scale.set(opts.radius * 5, opts.radius * 5, 1);
+  group.add(halo);
+
+  group.position.set(...opts.position);
+  group.userData = {
+    name,
+    core,
+    halo,
+    basePosition: group.position.clone(),
+    orbitRadius: opts.orbitRadius || 0,
+    orbitSpeed: opts.orbitSpeed || 0,
+    orbitPhase: Math.random() * Math.PI * 2,
+    interactive: true,
+    collected: false,
+  };
+
+  orbitalGroup.add(group);
+  orbitalObjects[name] = group;
+  return group;
+}
+
+function createSystemObjects() {
+  createOrbitalObject('fragment', CONFIG.objects.fragment);
+  createOrbitalObject('secondary', CONFIG.objects.secondary);
+  createOrbitalObject('mystery', CONFIG.objects.mystery);
+
+  // the mystery light only reveals itself through a hold-to-charge
+  // interaction rather than a simple click
+  orbitalObjects.mystery.userData.requiresHold = true;
+  orbitalObjects.mystery.children[0].material.emissiveIntensity = 1.4;
+}
+
+/* ----------------------------------------------------------
+   V4 — the Gravity gate: a dense, dark object with a ring and a
+   small swarm of particles held in its pull. Hidden until enough
+   hub progress has been made.
+---------------------------------------------------------- */
+function createGravityGate() {
+  const cfg = CONFIG.gravityGate;
+  createOrbitalObject('gravity', {
+    position: cfg.position,
+    radius: cfg.radius,
+    color: cfg.color,
+    glowColor: cfg.glowColor,
+    orbitRadius: 0.15,
+    orbitSpeed: 0.1,
+  });
+  const gate = orbitalObjects.gravity;
+  gate.userData.isGravityGate = true;
+  gate.children[0].material.emissiveIntensity = 1.1;
+  gate.visible = false; // revealed once CONFIG.gravityGate.unlockAt is reached
+
+  const ringGeo = new THREE.TorusGeometry(cfg.radius * 2.1, 0.02, 8, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: cfg.glowColor,
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = 1.3;
+  gate.add(ring);
+  gate.userData.ring = ring;
+
+  // a small swarm of particles held in its pull
+  const count = 30;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = cfg.radius * (2.5 + Math.random() * 2);
+    positions[i * 3] = Math.cos(a) * r;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * r * 0.4;
+    positions[i * 3 + 2] = Math.sin(a) * r;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: cfg.glowColor,
+    size: 0.03,
+    transparent: true,
+    opacity: 0.6,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const swarm = new THREE.Points(geo, mat);
+  gate.add(swarm);
+  gate.userData.swarm = swarm;
+}
+
+function revealGravityGate() {
+  if (gameState.gravityUnlocked) return;
+  gameState.gravityUnlocked = true;
+  orbitalObjects.gravity.visible = true;
+  saveGame();
+}
+
+function updateOrbitalObjects(t) {
+  Object.values(orbitalObjects).forEach((obj) => {
+    if (obj.userData.collected || obj.userData.beingCarried) return;
+    const { basePosition, orbitRadius, orbitSpeed, orbitPhase } = obj.userData;
+    obj.position.x = basePosition.x + Math.sin(t * orbitSpeed + orbitPhase) * orbitRadius;
+    obj.position.y = basePosition.y + Math.cos(t * orbitSpeed * 0.8 + orbitPhase) * orbitRadius * 0.6;
+    obj.rotation.y += 0.004;
+    obj.rotation.x += 0.0015;
+  });
+}
+
+/* ================================================================
+   V2 — PORTAL: a dormant orbital ring that becomes a doorway
+================================================================ */
+let portalGroup, portalRing, portalDisc, portalParticles;
+
+function createPortal() {
+  portalGroup = new THREE.Group();
+  portalGroup.position.set(...CONFIG.portal.position);
+  portalGroup.rotation.x = CONFIG.portal.tiltX;
+
+  const ringGeo = new THREE.TorusGeometry(CONFIG.portal.radius, CONFIG.portal.width, 12, 64);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: CONFIG.portal.color,
+    transparent: true,
+    opacity: 0.35,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  portalRing = new THREE.Mesh(ringGeo, ringMat);
+  portalGroup.add(portalRing);
+
+  // inner surface — invisible until activated
+  const discGeo = new THREE.CircleGeometry(CONFIG.portal.radius * 0.92, 48);
+  const discMat = new THREE.MeshBasicMaterial({
+    color: CONFIG.portal.color,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  portalDisc = new THREE.Mesh(discGeo, discMat);
+  portalGroup.add(portalDisc);
+
+  // particles that swirl toward the portal once active
+  const count = 220;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = CONFIG.portal.radius * (0.9 + Math.random() * 0.6);
+    positions[i * 3] = Math.cos(a) * r;
+    positions[i * 3 + 1] = Math.sin(a) * r;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 1.5;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: CONFIG.portal.color,
+    size: 0.05,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  portalParticles = new THREE.Points(geo, mat);
+  portalGroup.add(portalParticles);
+
+  portalGroup.userData = { active: false, activatedAt: null };
+  worldGroup.add(portalGroup);
+}
+
+function activatePortal() {
+  if (portalGroup.userData.active) return;
+  portalGroup.userData.active = true;
+  portalGroup.userData.activatedAt = clock.getElapsedTime();
+  gameState.portalActive = true;
+  showCenterMessage('GATE ONLINE');
+  saveGame();
+}
+
+function updatePortal(t) {
+  const active = portalGroup.userData.active;
+  const speed = active ? CONFIG.portal.activeSpeed : CONFIG.portal.idleSpeed;
+  portalRing.rotation.z += speed;
+  portalParticles.rotation.z -= speed * 1.6;
+
+  if (active) {
+    const age = t - portalGroup.userData.activatedAt;
+    const fade = THREE.MathUtils.clamp(age / 2.5, 0, 1);
+    portalDisc.material.opacity = 0.22 * fade + Math.sin(t * 1.5) * 0.03;
+    portalParticles.material.opacity = 0.6 * fade;
+    portalRing.material.opacity = 0.35 + fade * 0.35;
+  }
+}
+
+/* ================================================================
+   V2 — DRAGGABLE SHARD (drop it near the portal to nudge it awake)
+   Lives directly in `scene` (not worldGroup) so its drag math is a
+   simple camera-facing plane projection, independent of the
+   planet's current rotation.
+================================================================ */
+let shardMesh;
+
+function createShard() {
+  const geo = new THREE.IcosahedronGeometry(CONFIG.shard.radius, 0);
+  const mat = new THREE.MeshStandardMaterial({
+    color: CONFIG.shard.color,
+    emissive: 0xff8a3d,
+    emissiveIntensity: 0.6,
+    flatShading: true,
+  });
+  shardMesh = new THREE.Mesh(geo, mat);
+  shardMesh.position.set(...CONFIG.shard.position);
+  shardMesh.userData = {
+    basePosition: shardMesh.position.clone(),
+    carried: false,
+    settled: false,
+  };
+  hubGroup.add(shardMesh);
+}
+
+function updateShard(t) {
+  if (shardMesh.userData.carried || shardMesh.userData.settled) return;
+  shardMesh.rotation.y += 0.006;
+  shardMesh.position.y =
+    shardMesh.userData.basePosition.y + Math.sin(t * 0.7) * 0.15;
+}
+
+function returnShardHome() {
+  const start = shardMesh.position.clone();
+  const startTime = clock.getElapsedTime();
+  function ease() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.6, 1);
+    shardMesh.position.lerpVectors(start, shardMesh.userData.basePosition, p * p);
+    if (p < 1) requestAnimationFrame(ease);
+  }
+  ease();
+}
+
+function settleShardAtPortal() {
+  shardMesh.userData.settled = true;
+  const worldPortalPos = new THREE.Vector3();
+  portalGroup.getWorldPosition(worldPortalPos);
+  const start = shardMesh.position.clone();
+  const startTime = clock.getElapsedTime();
+  function ease() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.5, 1);
+    shardMesh.position.lerpVectors(start, worldPortalPos, p * p);
+    const s = 1 - p;
+    shardMesh.scale.set(s, s, s);
+    if (p < 1) {
+      requestAnimationFrame(ease);
+    } else {
+      shardMesh.visible = false;
+      spawnCursorRipple();
+      checkPortalReadiness();
     }
   }
-  </script>
+  ease();
+}
 
-  <script type="module">
-    import * as THREE from "three";
-    import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
-    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+/* ================================================================
+   V2 — MICRO-STRUCTURES ON THE PLANET SURFACE (zoom-gated reveal)
+   Purely decorative shapes, plus one interactive "symbol" that only
+   shows up once the camera is very close.
+================================================================ */
+let microStructuresGroup, microSymbol;
 
-    // ---------------------------------------------------------------
-    // Config
-    // ---------------------------------------------------------------
-    const BACKGROUND_COLOR = 0x95a8c8;
-    const MODEL_URL = "./assets/character.fbx";
+function createMicroStructures() {
+  microStructuresGroup = new THREE.Group();
+  const count = 40;
 
-    // Palette "figurine" (au lieu des textures d'origine, abîmées) :
-    // corps noir glacé, dégradé vers le bleu sur les extrémités
-    // (bout des oreilles, mains, pieds), à l'image de la référence fournie.
-    const COLOR_BODY = new THREE.Color(0x0c0c0c);
-    const COLOR_TIP = new THREE.Color(0x3f5fd8);
-    // portion (0-1) des vertex les plus "distaux" concernés par le dégradé
-    const GRADIENT_START_PERCENTILE = 0.55;
-    const GRADIENT_END_PERCENTILE = 0.92;
-
-    const container = document.getElementById("app");
-    const loadingEl = document.getElementById("loading");
-    const loadingText = document.getElementById("loading-text");
-    const hintEl = document.getElementById("hint");
-
-    // ---------------------------------------------------------------
-    // Scène / caméra / renderer
-    // ---------------------------------------------------------------
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(BACKGROUND_COLOR);
-    // léger brouillard pour fondre les particules lointaines dans le fond
-    scene.fog = new THREE.Fog(BACKGROUND_COLOR, 6, 14);
-
-    const camera = new THREE.PerspectiveCamera(
-      35,
-      container.clientWidth / container.clientHeight,
-      0.1,
-      100
+  for (let i = 0; i < count; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = CONFIG.planet.radius * 1.01;
+    const pos = new THREE.Vector3(
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.sin(phi) * Math.sin(theta),
+      r * Math.cos(phi)
     );
-    camera.position.set(0, 1.4, 4.2);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.05;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    container.appendChild(renderer.domElement);
+    const pick = Math.random();
+    let geo;
+    if (pick < 0.4) geo = new THREE.RingGeometry(0.05, 0.07, 8);
+    else if (pick < 0.75) geo = new THREE.CircleGeometry(0.03, 6);
+    else geo = new THREE.TorusGeometry(0.05, 0.008, 4, 10);
 
-    // Environnement de studio : donne des reflets doux et réalistes
-    // au matériau glossy (indispensable pour l'effet "figurine plastique")
-    const pmremGenerator = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-
-    // ---------------------------------------------------------------
-    // Lumières
-    // ---------------------------------------------------------------
-    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x6b7aa1, 0.9);
-    scene.add(hemiLight);
-
-    const keyLight = new THREE.DirectionalLight(0xffffff, 2.0);
-    keyLight.position.set(2.5, 4, 3);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
-    keyLight.shadow.camera.near = 0.5;
-    keyLight.shadow.camera.far = 12;
-    keyLight.shadow.camera.left = -3;
-    keyLight.shadow.camera.right = 3;
-    keyLight.shadow.camera.top = 3;
-    keyLight.shadow.camera.bottom = -3;
-    keyLight.shadow.bias = -0.0005;
-    scene.add(keyLight);
-
-    const rimLight = new THREE.DirectionalLight(0xcfe0ff, 1.1);
-    rimLight.position.set(-3, 2, -3);
-    scene.add(rimLight);
-
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
-    fillLight.position.set(-2, 1, 3);
-    scene.add(fillLight);
-
-    // ombre douce au sol (invisible, reçoit juste l'ombre portée)
-    const shadowGround = new THREE.Mesh(
-      new THREE.CircleGeometry(3, 48),
-      new THREE.ShadowMaterial({ opacity: 0.18 })
-    );
-    shadowGround.rotation.x = -Math.PI / 2;
-    shadowGround.position.y = 0;
-    shadowGround.receiveShadow = true;
-    scene.add(shadowGround);
-
-    // ---------------------------------------------------------------
-    // Membres articulés (le FBX n'a pas de squelette : on simule une
-    // vraie chaîne hiérarchique — hanche→genou, épaule→coude, cou —
-    // à partir de points calibrés à la main directement sur le mesh,
-    // au lieu de deviner une zone automatiquement)
-    // ---------------------------------------------------------------
-    const DRAG_SENSITIVITY = 0.012; // radians par pixel glissé
-    const MAX_LIMB_ANGLE = THREE.MathUtils.degToRad(55);
-    const SPRING_SPEED = 9; // vitesse du retour élastique
-
-    // Repère local du FBX : Z est l'axe vertical (confirmé par la bounding
-    // box du mesh : Z va de 0 aux pieds à ~1.9 en haut de la tête).
-    const UP_AXIS = new THREE.Vector3(0, 0, 1);
-
-    // Points cliqués sur le mesh pendant la calibration (espace local du
-    // mesh). Chaque chaîne = [articulation proche du corps, articulation
-    // distale]. Le "cou" n'a qu'une seule articulation (fait basculer
-    // toute la tête/oreilles ensemble).
-    // Rayon de capture autour de l'axe de chaque chaîne : assez large pour
-    // couvrir le membre ENTIER (pied/main/oreille compris), valeurs mesurées
-    // directement sur la géométrie du mesh (voir analyse hors-ligne).
-    const CHAIN_DEFS = [
-      { name: "hanche_gauche", child: "genou_gauche", radius: 0.42, sMin: -0.05 },
-      { name: "hanche_droite", child: "genou_droit", radius: 0.42, sMin: -0.05 },
-      { name: "epaule_gauche", child: "coude_gauche", radius: 0.45, sMin: -0.05 },
-      { name: "epaule_droite", child: "coude_droit", radius: 0.45, sMin: -0.05 },
-      { name: "cou", child: null, radius: 0.90, sMin: -0.14 },
-    ];
-    const CALIBRATED_POINTS = {
-      genou_gauche: new THREE.Vector3(0.11563, -0.06482, 0.38684),
-      genou_droit: new THREE.Vector3(-0.10082, -0.06814, 0.40198),
-      hanche_gauche: new THREE.Vector3(0.08939, -0.07064, 0.51424),
-      hanche_droite: new THREE.Vector3(-0.08397, -0.07663, 0.52264),
-      epaule_gauche: new THREE.Vector3(0.10254, -0.00732, 0.77457),
-      epaule_droite: new THREE.Vector3(-0.09953, -0.00956, 0.77488),
-      coude_gauche: new THREE.Vector3(0.31632, 0.00123, 0.75121),
-      coude_droit: new THREE.Vector3(-0.35283, 0.00026, 0.75139),
-      cou: new THREE.Vector3(0.02064, -0.05691, 0.81782),
-    };
-    const BLEND_ATTACH = 0.045; // zone de transition à l'attache sur le corps
-    const BLEND_JOINT = 0.035;  // zone de transition au genou/coude
-
-    // ---------------------------------------------------------------
-    // Contrôles (rotation à la souris / au doigt)
-    // ---------------------------------------------------------------
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 1.1, 0);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.enablePan = false;
-    controls.minDistance = 2.2;
-    controls.maxDistance = 7;
-    controls.minPolarAngle = Math.PI * 0.15;
-    controls.maxPolarAngle = Math.PI * 0.85;
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 1.1;
-    controls.update();
-
-    // coupe l'auto-rotation pendant l'interaction, la reprend après un délai
-    let autoRotateTimeout = null;
-    function pauseAutoRotate() {
-      controls.autoRotate = false;
-      hintEl.classList.add("hidden");
-      clearTimeout(autoRotateTimeout);
-      autoRotateTimeout = setTimeout(() => {
-        controls.autoRotate = true;
-      }, 2500);
-    }
-    renderer.domElement.addEventListener("pointerdown", pauseAutoRotate);
-
-    // ---------------------------------------------------------------
-    // Particules brillantes
-    // ---------------------------------------------------------------
-    function createGlowTexture() {
-      const size = 128;
-      const canvas = document.createElement("canvas");
-      canvas.width = canvas.height = size;
-      const ctx = canvas.getContext("2d");
-      const gradient = ctx.createRadialGradient(
-        size / 2, size / 2, 0,
-        size / 2, size / 2, size / 2
-      );
-      gradient.addColorStop(0, "rgba(255,255,255,1)");
-      gradient.addColorStop(0.35, "rgba(255,255,255,0.7)");
-      gradient.addColorStop(1, "rgba(255,255,255,0)");
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, size, size);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      return tex;
-    }
-
-    const PARTICLE_COUNT = 260;
-    const particleGeometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(PARTICLE_COUNT * 3);
-    const seeds = new Float32Array(PARTICLE_COUNT); // pour désynchroniser l'animation
-    const radii = new Float32Array(PARTICLE_COUNT);
-    const heights = new Float32Array(PARTICLE_COUNT);
-    const angles = new Float32Array(PARTICLE_COUNT);
-    const sizes = new Float32Array(PARTICLE_COUNT);
-
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const radius = 0.9 + Math.random() * 1.9;
-      const height = Math.random() * 3.0 - 0.2;
-      angles[i] = angle;
-      radii[i] = radius;
-      heights[i] = height;
-      seeds[i] = Math.random() * Math.PI * 2;
-      sizes[i] = 0.02 + Math.random() * 0.05;
-
-      positions[i * 3] = Math.cos(angle) * radius;
-      positions[i * 3 + 1] = height;
-      positions[i * 3 + 2] = Math.sin(angle) * radius;
-    }
-
-    particleGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-
-    const particleMaterial = new THREE.PointsMaterial({
-      size: 0.06,
-      map: createGlowTexture(),
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0x5ee7ff,
       transparent: true,
-      opacity: 0.9,
-      depthWrite: false,
+      opacity: 0.25 + Math.random() * 0.2,
+      side: THREE.DoubleSide,
       blending: THREE.AdditiveBlending,
-      color: 0xffffff,
-      sizeAttenuation: true,
+      depthWrite: false,
     });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
+    mesh.lookAt(pos.clone().multiplyScalar(2));
+    microStructuresGroup.add(mesh);
+  }
 
-    const particles = new THREE.Points(particleGeometry, particleMaterial);
-    scene.add(particles);
+  // the one interactive symbol, hidden among the decoration
+  const symbolGeo = new THREE.RingGeometry(0.09, 0.12, 24);
+  const symbolMat = new THREE.MeshBasicMaterial({
+    color: 0xf5c56b,
+    transparent: true,
+    opacity: 0.85,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  microSymbol = new THREE.Mesh(symbolGeo, symbolMat);
+  const symTheta = 1.2, symPhi = 1.4;
+  const symR = CONFIG.planet.radius * 1.01;
+  const symPos = new THREE.Vector3(
+    symR * Math.sin(symPhi) * Math.cos(symTheta),
+    symR * Math.sin(symPhi) * Math.sin(symTheta),
+    symR * Math.cos(symPhi)
+  );
+  microSymbol.position.copy(symPos);
+  microSymbol.lookAt(symPos.clone().multiplyScalar(2));
+  microSymbol.userData = { interactive: true, activated: false };
+  microStructuresGroup.add(microSymbol);
 
-    // quelques particules plus grosses / plus lumineuses pour la profondeur
-    const sparklePositions = positions; // on réutilise le même tableau de base
+  microStructuresGroup.visible = false;
+  planetMesh.add(microStructuresGroup);
+}
 
-    // ---------------------------------------------------------------
-    // Chargement du personnage
-    // ---------------------------------------------------------------
+function updateMicroZoom() {
+  const d = cameraRig.distance;
+  microStructuresGroup.visible = d <= CONFIG.microZoom.closeAt;
+  microSymbol.visible = d <= CONFIG.microZoom.veryCloseAt;
+}
 
-    // Applique le dégradé de couleur noir → bleu (extrémités), inchangé,
-    // indépendant du rig d'articulation.
-    function applyGradientColors(mesh) {
-      const posAttr = mesh.geometry.attributes.position;
-      const count = posAttr.count;
-      const box = new THREE.Box3().setFromBufferAttribute(posAttr);
-      const center = box.getCenter(new THREE.Vector3());
-      const distances = new Float32Array(count);
-      const v = new THREE.Vector3();
-      for (let i = 0; i < count; i++) {
-        v.fromBufferAttribute(posAttr, i).sub(center);
-        distances[i] = v.length();
-      }
-      const sorted = Array.from(distances).sort((a, b) => a - b);
-      const pct = (p) => sorted[Math.min(count - 1, Math.floor(p * (count - 1)))];
-      const startDist = pct(GRADIENT_START_PERCENTILE);
-      const endDist = pct(GRADIENT_END_PERCENTILE);
-      const colors = new Float32Array(count * 3);
-      const tmpColor = new THREE.Color();
-      for (let i = 0; i < count; i++) {
-        const t = THREE.MathUtils.smoothstep(distances[i], startDist, endDist);
-        tmpColor.copy(COLOR_BODY).lerp(COLOR_TIP, t);
-        colors[i * 3] = tmpColor.r; colors[i * 3 + 1] = tmpColor.g; colors[i * 3 + 2] = tmpColor.b;
-      }
-      mesh.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+function activateMicroSymbol() {
+  if (microSymbol.userData.activated) return;
+  microSymbol.userData.activated = true;
+  microSymbol.material.color.setHex(0xffffff);
+  gameState.energy += 2;
+  spawnCursorRipple();
+  showCenterMessage('SIGNAL ACQUIRED');
+}
+
+/* ================================================================
+   V2 — SECRET ZONE (revealed once enough progress has been made)
+================================================================ */
+let secretZoneGroup;
+
+function createSecretZone() {
+  secretZoneGroup = new THREE.Group();
+  secretZoneGroup.position.set(9.5, 3.5, -6);
+
+  const geo = new THREE.IcosahedronGeometry(0.5, 1);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0,
+    wireframe: true,
+  });
+  secretZoneGroup.add(new THREE.Mesh(geo, mat));
+  secretZoneGroup.userData = { revealProgress: 0 };
+  worldGroup.add(secretZoneGroup);
+}
+
+function updateSecretZone(delta) {
+  const target = gameState.secretZoneRevealed ? 1 : 0;
+  secretZoneGroup.userData.revealProgress = THREE.MathUtils.lerp(
+    secretZoneGroup.userData.revealProgress,
+    target,
+    delta * 0.8
+  );
+  const mesh = secretZoneGroup.children[0];
+  mesh.material.opacity = secretZoneGroup.userData.revealProgress * 0.5;
+  mesh.rotation.y += 0.003;
+}
+
+/* ================================================================
+   V2 — WORLD STATE (section 16): the scene visibly reflects progress
+================================================================ */
+function updateWorldState() {
+  // more particles feel "alive" once the player has found a few things
+  if (gameState.discoveries >= CONFIG.world.moreParticlesAt) {
+    nearParticles.material.opacity = 0.9;
+  }
+  // rings read brighter as discovery progresses
+  if (gameState.discoveries >= CONFIG.world.brighterRingsAt) {
+    ringMeshes.forEach((r) => {
+      r.userData.baseOpacity = Math.min(r.userData.baseOpacity * 1.4, 0.6);
+    });
+  }
+  // secret zone appears once curious enough progress exists
+  if (
+    !gameState.secretZoneRevealed &&
+    gameState.discoveries >= 3 &&
+    gameState.collectedFragments >= 1
+  ) {
+    gameState.secretZoneRevealed = true;
+  }
+  // V4 — the Gravity gate reveals itself once enough has been discovered
+  if (!gameState.gravityUnlocked && gameState.discoveries >= CONFIG.gravityGate.unlockAt) {
+    revealGravityGate();
+  }
+  checkPortalReadiness();
+  updateFragmentUI();
+  saveGame();
+}
+
+function checkPortalReadiness() {
+  if (
+    !gameState.portalActive &&
+    gameState.discoveries >= CONFIG.nodes.count &&
+    gameState.collectedFragments >= 1
+  ) {
+    activatePortal();
+  }
+}
+
+/* ================================================================
+   V2 — MINIMAL UI ADDITIONS (fragment counter + transient messages)
+================================================================ */
+function updateFragmentUI() {
+  const el = document.getElementById('fragment-index');
+  const total = gameState.collectedFragments + gameState.collectedCores + gameState.collectedGravitySeeds;
+  if (el) el.textContent = `\u25C8 ${String(total).padStart(2, '0')}`;
+}
+
+let centerMessageTimeout = null;
+function showCenterMessage(text, duration = 3200) {
+  const el = document.getElementById('unlock-message');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(centerMessageTimeout);
+  centerMessageTimeout = setTimeout(() => {
+    el.classList.remove('show');
+  }, duration);
+}
+
+/* ================================================================
+   V2 — FRAGMENT ABSORPTION (the first "wow" moment, section 22)
+================================================================ */
+let absorption = null; // { startTime, fragment }
+
+function startFragmentAbsorption(fragment) {
+  if (fragment.userData.collected) return;
+  fragment.userData.collected = true;
+  absorption = { startTime: clock.getElapsedTime(), fragment };
+}
+
+function updateFragmentAbsorption(t) {
+  if (!absorption) return;
+  const age = t - absorption.startTime;
+  const fragment = absorption.fragment;
+  const planetWorldPos = new THREE.Vector3();
+  planetGroup.getWorldPosition(planetWorldPos);
+
+  if (age < 1.0) {
+    // brighten and pull inward slightly, particles gather
+    const p = age / 1.0;
+    fragment.children[0].material.emissiveIntensity = 0.7 + p * 2;
+    fragment.scale.setScalar(1 + p * 0.4);
+  } else if (age < 1.8) {
+    // travel to the planet as a small energy sphere
+    const p = (age - 1.0) / 0.8;
+    fragment.position.lerpVectors(fragment.userData.basePosition, planetWorldPos, p * p);
+    fragment.scale.setScalar(Math.max(0.1, 1.4 * (1 - p * 0.6)));
+  } else if (age < 1.85) {
+    // impact — trigger the big wow exactly once
+    if (!absorption.wowFired) {
+      absorption.wowFired = true;
+      triggerBigWow();
     }
+    fragment.visible = false;
+  } else {
+    gameState.collectedFragments += 1;
+    updateWorldState();
+    absorption = null;
+  }
+}
 
-    // Trouve le sommet du mesh le plus proche d'un point donné (permet de
-    // "coller" un point calibré, cliqué sur la surface, à un vrai sommet).
-    function nearestVertexPos(posAttr, point) {
-      let best = -1, bestDist = Infinity;
-      const v = new THREE.Vector3();
-      for (let i = 0; i < posAttr.count; i++) {
-        v.fromBufferAttribute(posAttr, i);
-        const d = v.distanceToSquared(point);
-        if (d < bestDist) { bestDist = d; best = i; }
-      }
-      return v.fromBufferAttribute(posAttr, best).clone();
+function triggerBigWow() {
+  const t0 = clock.getElapsedTime();
+  wowEvent = { start: t0 };
+  gameState.energy += 3;
+
+  // scatter a burst of ripples across the planet surface
+  for (let i = 0; i < 5; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const r = CONFIG.planet.radius;
+    const pos = new THREE.Vector3(
+      r * Math.sin(phi) * Math.cos(theta),
+      r * Math.sin(phi) * Math.sin(theta),
+      r * Math.cos(phi)
+    );
+    spawnSurfaceRipple(pos);
+  }
+}
+
+let wowEvent = null;
+function updateWowEvent(t) {
+  if (!wowEvent) return;
+  const age = t - wowEvent.start;
+  const duration = 1.4;
+  if (age > duration) {
+    wowEvent = null;
+    return;
+  }
+  const p = age / duration;
+  // brief darken-then-flash on the planet material, plus a ring speed burst
+  const flash = Math.sin(p * Math.PI); // rises then falls
+  planetMesh.material.emissiveIntensity = 0.6 + flash * 3;
+  glowMesh.material.opacity = CONFIG.planet.glowOpacity + flash * 0.5;
+  ringMeshes.forEach((r) => (r.rotation.z += r.userData.speed * flash * 10));
+  const pushback = 1 - flash * 0.4;
+  nearParticles.scale.setScalar(1 + flash * 0.15);
+}
+
+/* ================================================================
+   V2 — PORTAL TRANSITION (section 9)
+   V3 note: activating the portal now leads into the real
+   Constellation zone (see V3 ZONE SYSTEM below) instead of the
+   old "peek and return" dolly. The camera-dolly phases are reused
+   as the first half of that longer sequence.
+================================================================ */
+function triggerPortalTransition() {
+  triggerZoneTransition('constellation', portalGroup, portalDisc.material);
+}
+
+/* ================================================================
+   V3/V4 — ZONE SYSTEM
+   One scene, one camera, one renderer — zones are just THREE.Group
+   visibility toggles, per section 29. Add a future zone by:
+     1. building its content in its own group (see createConstellationZone)
+     2. adding a camera-start entry to getZoneCameraStart()
+     3. calling triggerZoneTransition('yourZoneName', someGroup, someMaterial)
+================================================================ */
+let activeZone = 'hub';
+let constellationGroup;
+let gravityGroup;
+let zoneTransition = null; // { toZone, targetGroup, flashMaterial, startTime }
+
+const FLASH_OVERLAY = () => document.getElementById('flash-overlay');
+
+function getZoneCameraStart(zone) {
+  if (zone === 'constellation') return CONFIG.constellation.cameraStart;
+  if (zone === 'gravity') return CONFIG.gravity.cameraStart;
+  return CONFIG.camera.startDistance;
+}
+
+function enterZone(name) {
+  activeZone = name;
+  gameState.currentZone = name;
+  hubGroup.visible = name === 'hub';
+  constellationGroup.visible = name === 'constellation';
+  gravityGroup.visible = name === 'gravity';
+
+  if (name === 'hub') {
+    cameraRig.distance = CONFIG.camera.startDistance;
+    cameraRig.targetDistance = CONFIG.camera.startDistance;
+    document.getElementById('drag-hint').textContent = 'DRAG TO EXPLORE';
+    document.getElementById('drag-hint').classList.toggle('hidden', hasInteracted);
+    document.getElementById('progress-index').textContent =
+      `${String(gameState.discoveries).padStart(2, '0')} / DISCOVERY`;
+    if (gameState.collectedCores >= 1) spawnHubCoreObject();
+    if (gameState.collectedGravitySeeds >= 1) spawnHubGravitySeedObject();
+  } else if (name === 'constellation') {
+    cameraRig.distance = CONFIG.constellation.cameraStart;
+    cameraRig.targetDistance = CONFIG.constellation.cameraStart;
+    document.getElementById('drag-hint').textContent = 'DRAG TO CONNECT';
+    document.getElementById('drag-hint').classList.toggle('hidden', hasInteractedConstellation);
+    updateConstellationProgressUI();
+  } else if (name === 'gravity') {
+    cameraRig.distance = CONFIG.gravity.cameraStart;
+    cameraRig.targetDistance = CONFIG.gravity.cameraStart;
+    document.getElementById('progress-index').textContent = 'GRAVITY';
+    document.getElementById('drag-hint').classList.add('hidden');
+    showGravityFirstHint();
+  }
+  saveGame();
+}
+
+/* ----------------------------------------------------------
+   Phased cinematic transition, reused for every zone pair
+   (sections 2, 4 & 23 — same choreography, different targets)
+---------------------------------------------------------- */
+function triggerZoneTransition(toZone, targetGroup, flashMaterial) {
+  if (zoneTransition) return;
+  const warm = toZone === 'gravity' || activeZone === 'gravity';
+  FLASH_OVERLAY().classList.toggle('warm', warm);
+  zoneTransition = { toZone, targetGroup, flashMaterial, startTime: clock.getElapsedTime() };
+}
+
+function updateZoneTransition(t) {
+  if (!zoneTransition) return;
+  const age = t - zoneTransition.startTime;
+
+  // phase durations — shared by every zone pair
+  const brighten = 0.8;
+  const gather = 0.8;
+  const advance = 1.2;
+  const flashIn = 0.4;
+  const flashOut = 1.0;
+  const swapAt = brighten + gather + advance + flashIn;
+  const total = swapAt + flashOut;
+
+  const overlay = FLASH_OVERLAY();
+
+  if (age < brighten) {
+    // phase 1 — the destination flares brighter
+    const p = age / brighten;
+    if (zoneTransition.flashMaterial) {
+      zoneTransition.flashMaterial.opacity = THREE.MathUtils.lerp(
+        zoneTransition.flashMaterial.opacity, 0.9, p
+      );
     }
-
-    // Trouve, pour une chaîne (parent -> enfant), le sommet le plus distal
-    // dans une direction approchée : sert à affiner l'axe réel du membre
-    // (main/pied) plutôt que de se fier à la simple droite parent->enfant.
-    function findFarthestAlong(posAttr, parentPos, dirGuess, radius, sMin) {
-      const v = new THREE.Vector3();
-      const rel = new THREE.Vector3();
-      const perp = new THREE.Vector3();
-      let best = null, bestS = -Infinity;
-      for (let i = 0; i < posAttr.count; i++) {
-        v.fromBufferAttribute(posAttr, i);
-        rel.copy(v).sub(parentPos);
-        const s = rel.dot(dirGuess);
-        if (s <= sMin || s <= bestS) continue;
-        perp.copy(rel).addScaledVector(dirGuess, -s);
-        if (perp.length() < radius) { bestS = s; best = v.clone(); }
-      }
-      return best;
+  } else if (age < brighten + gather) {
+    // phase 2/3 — particles pulled inward, the current zone slows
+    const p = (age - brighten) / gather;
+    if (nearParticles) nearParticles.material.opacity = THREE.MathUtils.lerp(nearParticles.material.opacity, 0.15, p);
+  } else if (age < brighten + gather + advance) {
+    // phase 4 — camera advances toward the destination
+    const p = (age - brighten - gather) / advance;
+    const eased = p * p * (3 - 2 * p);
+    const targetPos = new THREE.Vector3();
+    zoneTransition.targetGroup.getWorldPosition(targetPos);
+    if (!zoneTransition.camFrom) zoneTransition.camFrom = camera.position.clone();
+    camera.position.lerpVectors(zoneTransition.camFrom, targetPos, eased);
+    camera.lookAt(targetPos);
+  } else if (age < swapAt) {
+    // phase 5 — screen goes bright
+    const p = (age - brighten - gather - advance) / flashIn;
+    if (overlay) overlay.style.opacity = p.toFixed(3);
+  } else if (age < total) {
+    // phase 6 — swap zones at peak brightness, then fade back in
+    if (!zoneTransition.swapped) {
+      zoneTransition.swapped = true;
+      const startDist = getZoneCameraStart(zoneTransition.toZone);
+      enterZone(zoneTransition.toZone);
+      camera.position.set(0, 0, startDist);
+      camera.lookAt(0, 0, 0);
+      if (zoneTransition.toZone === 'hub') nearParticles.material.opacity = 0.7;
     }
+    const p = (age - swapAt) / flashOut;
+    if (overlay) overlay.style.opacity = (1 - p).toFixed(3);
+  } else {
+    if (overlay) overlay.style.opacity = 0;
+    zoneTransition = null;
+  }
+}
 
-    // Construit le rig hiérarchique complet (hanche->genou, épaule->coude,
-    // cou) à partir des points calibrés à la main, et prépare pour chaque
-    // sommet concerné les poids d'influence de chaque articulation.
-    //
-    // Attribution : chaque sommet est rattaché à LA chaîne dont l'axe est le
-    // plus proche (au lieu du système précédent "premier arrivé, premier
-    // servi" avec un fondu qui coupait le poids près du bord du rayon) —
-    // ça garantit que le membre entier suit d'un bloc, bout d'oreille et
-    // main/pied compris, plutôt que de laisser des sommets orphelins ou
-    // à peine pondérés à l'extrémité.
-    function setupCharacterMesh(mesh) {
-      applyGradientColors(mesh);
-      const geometry = mesh.geometry;
-      const posAttr = geometry.attributes.position;
-      const count = posAttr.count;
+/* ----------------------------------------------------------
+   CONSTELLATION ZONE — content
+---------------------------------------------------------- */
+let constellationPoints = [];
+let constellationLines;      // permanent, correctly-connected lines
+let tempConnectLine;         // the line following the cursor while connecting
+let connecting = null;       // { fromPoint }
+let connectedPairs = new Set();
+let coreMesh, coreGlow;
+let coreRewardGroup = null;
+let returnPortalGroup = null, returnPortalDisc = null;
+let hasInteractedConstellation = false;
+let hoveredConstellationPoint = null;
+let hoveredCoreReward = false;
+let hoveredReturnPortal = false;
 
-      // Snappe chaque point calibré au sommet réel le plus proche
-      const snapped = {};
-      for (const key in CALIBRATED_POINTS) {
-        snapped[key] = nearestVertexPos(posAttr, CALIBRATED_POINTS[key]);
-      }
+function createConstellationZone() {
+  constellationGroup = new THREE.Group();
+  constellationGroup.visible = false;
+  scene.add(constellationGroup);
 
-      const joints = []; // { name, pivot, axisA, axisB, current, target }
-      const chains = CHAIN_DEFS.map((def) => {
-        const parentPos = snapped[def.name];
-        const hasChild = !!def.child;
-        let dir, childS = null;
+  // a colder, deeper starfield unique to this zone
+  const count = 2200;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = 60 * (0.3 + Math.random() * 0.7);
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xcfe8ff,
+    size: 0.05,
+    transparent: true,
+    opacity: 0.6,
+    sizeAttenuation: true,
+  });
+  constellationGroup.add(new THREE.Points(geo, mat));
 
-        if (hasChild) {
-          const childPos = snapped[def.child];
-          const dir0 = childPos.clone().sub(parentPos).normalize();
-          const tip = findFarthestAlong(posAttr, parentPos, dir0, def.radius, def.sMin)
-            || parentPos.clone().addScaledVector(dir0, 0.1);
-          dir = tip.clone().sub(parentPos).normalize();
-          childS = childPos.clone().sub(parentPos).dot(dir);
-        } else {
-          dir = UP_AXIS.clone();
-        }
+  // the central core / "noyau"
+  const coreGeo = new THREE.IcosahedronGeometry(CONFIG.constellation.coreRadius, 1);
+  const coreMat = new THREE.MeshStandardMaterial({
+    color: 0x14203a,
+    emissive: CONFIG.constellation.coreColor,
+    emissiveIntensity: 0.8,
+    flatShading: true,
+  });
+  coreMesh = new THREE.Mesh(coreGeo, coreMat);
+  constellationGroup.add(coreMesh);
 
-        const axisA = UP_AXIS.clone();
-        let axisB = new THREE.Vector3().crossVectors(axisA, dir);
-        if (axisB.lengthSq() < 0.02) axisB = new THREE.Vector3().crossVectors(new THREE.Vector3(1, 0, 0), dir);
-        axisB.normalize();
+  const coreGlowGeo = new THREE.IcosahedronGeometry(CONFIG.constellation.coreRadius * 1.8, 1);
+  const coreGlowMat = new THREE.MeshBasicMaterial({
+    color: CONFIG.constellation.coreColor,
+    transparent: true,
+    opacity: 0.3,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  coreGlow = new THREE.Mesh(coreGlowGeo, coreGlowMat);
+  constellationGroup.add(coreGlow);
 
-        const parentJointIndex = joints.length;
-        joints.push({ name: def.name, pivot: parentPos.clone(), axisA, axisB, current: { yaw: 0, pitch: 0 }, target: { yaw: 0, pitch: 0 } });
-        let childJointIndex = -1;
-        if (hasChild) {
-          childJointIndex = joints.length;
-          joints.push({ name: def.child, pivot: snapped[def.child].clone(), axisA, axisB, current: { yaw: 0, pitch: 0 }, target: { yaw: 0, pitch: 0 } });
-        }
+  createConstellationPoints();
+  createConstellationLines();
+  createReturnPortalObject();
+}
 
-        return { def, parentPos, dir, hasChild, childS, parentJointIndex, childJointIndex };
+function createConstellationPoints() {
+  const n = CONFIG.constellation.pointCount;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+
+  // give paired points a shared pulse phase — a subtle hint (section 18)
+  const pairPhase = {};
+  CONFIG.constellation.solution.forEach(([a, b], i) => {
+    const phase = i * 1.3;
+    pairPhase[a] = phase;
+    pairPhase[b] = phase;
+  });
+
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const radiusAtY = Math.sqrt(1 - y * y);
+    const theta = golden * i * 1.7; // extra twist so the layout isn't an obvious path
+    const r = CONFIG.constellation.fieldRadius * (0.75 + Math.random() * 0.4);
+    const pos = new THREE.Vector3(
+      Math.cos(theta) * radiusAtY,
+      y,
+      Math.sin(theta) * radiusAtY
+    ).multiplyScalar(r);
+
+    const isDecoy = !(i in pairPhase);
+    const geo = new THREE.SphereGeometry(0.1, 12, 12);
+    const mat = new THREE.MeshBasicMaterial({
+      color: CONFIG.constellation.color,
+      transparent: true,
+      opacity: isDecoy ? 0.12 : 0.22,
+    });
+    const point = new THREE.Mesh(geo, mat);
+    point.position.copy(pos);
+
+    const haloMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(),
+      color: CONFIG.constellation.color,
+      transparent: true,
+      opacity: isDecoy ? 0.15 : 0.3,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const halo = new THREE.Sprite(haloMat);
+    halo.scale.set(0.6, 0.6, 0.6);
+    point.add(halo);
+
+    point.userData = {
+      id: i,
+      halo,
+      connected: false,
+      pulsePhase: pairPhase[i] !== undefined ? pairPhase[i] : Math.random() * Math.PI * 2,
+    };
+
+    constellationGroup.add(point);
+    constellationPoints.push(point);
+  }
+}
+
+function createConstellationLines() {
+  constellationLines = new THREE.Group();
+  constellationGroup.add(constellationLines);
+
+  // reusable temp line for the in-progress drag connection —
+  // a bright thin core plus a soft wide line behind it (section 13)
+  const tempGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(), new THREE.Vector3(),
+  ]);
+  const tempMat = new THREE.LineBasicMaterial({
+    color: CONFIG.constellation.coreColor,
+    transparent: true,
+    opacity: 0.7,
+  });
+  tempConnectLine = new THREE.Line(tempGeo, tempMat);
+  tempConnectLine.visible = false;
+  constellationGroup.add(tempConnectLine);
+}
+
+function makeConnectionLine(pointA, pointB) {
+  const group = new THREE.Group();
+  const pts = [pointA.position.clone(), pointB.position.clone()];
+
+  const coreGeo = new THREE.BufferGeometry().setFromPoints(pts);
+  const coreMat = new THREE.LineBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.9,
+  });
+  group.add(new THREE.Line(coreGeo, coreMat));
+
+  const glowGeo = new THREE.BufferGeometry().setFromPoints(pts);
+  const glowMat = new THREE.LineBasicMaterial({
+    color: CONFIG.constellation.coreColor,
+    transparent: true,
+    opacity: 0.25,
+    linewidth: 2,
+  });
+  group.add(new THREE.Line(glowGeo, glowMat));
+
+  group.userData = { birth: clock.getElapsedTime() };
+  return group;
+}
+
+/* ----------------------------------------------------------
+   Connecting interaction — confirm / reject
+---------------------------------------------------------- */
+function confirmConnection(fromPoint, toPoint) {
+  const key = [fromPoint.userData.id, toPoint.userData.id].sort().join('-');
+  connectedPairs.add(key);
+  fromPoint.userData.connected = true;
+  toPoint.userData.connected = true;
+
+  const line = makeConnectionLine(fromPoint, toPoint);
+  constellationLines.add(line);
+  spawnLinePulse(fromPoint.position.clone(), toPoint.position.clone());
+  spawnCursorRipple();
+
+  gameState.constellationProgress.push(key);
+  updateConstellationProgressUI();
+  saveGame();
+
+  if (connectedPairs.size >= CONFIG.constellation.solution.length) {
+    triggerConstellationCompletion();
+  }
+}
+
+function rejectConnection() {
+  const mat = tempConnectLine.material;
+  const startOpacity = mat.opacity;
+  const startTime = clock.getElapsedTime();
+  function fade() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.4, 1);
+    mat.opacity = startOpacity * (1 - p);
+    tempConnectLine.position.x = (Math.random() - 0.5) * 0.03 * (1 - p); // tiny tremble
+    if (p < 1) {
+      requestAnimationFrame(fade);
+    } else {
+      tempConnectLine.visible = false;
+      tempConnectLine.position.set(0, 0, 0);
+      mat.opacity = 0.7;
+    }
+  }
+  fade();
+}
+
+/* small bright pulse that travels along a freshly confirmed line */
+function spawnLinePulse(fromPos, toPos) {
+  const geo = new THREE.SphereGeometry(0.06, 8, 8);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const pulse = new THREE.Mesh(geo, mat);
+  pulse.position.copy(fromPos);
+  constellationGroup.add(pulse);
+
+  const startTime = clock.getElapsedTime();
+  function travel() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.7, 1);
+    pulse.position.lerpVectors(fromPos, toPos, p);
+    mat.opacity = 1 - p * 0.3;
+    if (p < 1) {
+      requestAnimationFrame(travel);
+    } else {
+      constellationGroup.remove(pulse);
+      geo.dispose();
+      mat.dispose();
+    }
+  }
+  travel();
+}
+
+function updateConstellationProgressUI() {
+  const el = document.getElementById('progress-index');
+  el.textContent = `CONSTELLATION ${String(connectedPairs.size).padStart(2, '0')} / ${CONFIG.constellation.solution.length}`;
+}
+
+/* ----------------------------------------------------------
+   Completion sequence (section 20) + The Core (section 21)
+---------------------------------------------------------- */
+let constellationCompletion = null;
+
+function triggerConstellationCompletion() {
+  constellationCompletion = { startTime: clock.getElapsedTime(), wowFired: false };
+}
+
+function updateConstellationCompletionAnim(t) {
+  if (!constellationCompletion) return;
+  const age = t - constellationCompletion.startTime;
+
+  if (age < 1.0) {
+    // step 1 — every line goes fully bright
+    constellationLines.children.forEach((line) => {
+      line.children[0].material.opacity = 0.9 + Math.sin(age * 6) * 0.1;
+    });
+  } else if (age < 2.2) {
+    // step 2/3 — the whole constellation spins up and points synchronize
+    const p = (age - 1.0) / 1.2;
+    constellationGroup.rotation.y += 0.01 + p * 0.03;
+    constellationPoints.forEach((pt) => (pt.userData.pulsePhase = age * 3));
+  } else if (age < 2.8) {
+    // step 4 — one last wave along every line at once
+    if (!constellationCompletion.waveFired) {
+      constellationCompletion.waveFired = true;
+      CONFIG.constellation.solution.forEach(([a, b]) => {
+        spawnLinePulse(
+          constellationPoints[a].position.clone(),
+          constellationPoints[b].position.clone()
+        );
       });
-
-      // Compacte en tableaux typés pour la boucle d'animation
-      const activeIndices = [];
-      const parentJoint = new Int16Array(count).fill(-1);
-      const parentWeight = new Float32Array(count);
-      const childJoint = new Int16Array(count).fill(-1);
-      const childWeight = new Float32Array(count);
-
-      const v = new THREE.Vector3();
-      const rel = new THREE.Vector3();
-      const perp = new THREE.Vector3();
-
-      for (let i = 0; i < count; i++) {
-        v.fromBufferAttribute(posAttr, i);
-        let bestChain = -1, bestD = Infinity, bestS = 0;
-        for (let ci = 0; ci < chains.length; ci++) {
-          const c = chains[ci];
-          rel.copy(v).sub(c.parentPos);
-          const s = rel.dot(c.dir);
-          if (s < c.def.sMin) continue;
-          perp.copy(rel).addScaledVector(c.dir, -s);
-          const d = perp.length();
-          if (d > c.def.radius || d >= bestD) continue;
-          bestD = d; bestChain = ci; bestS = s;
-        }
-        if (bestChain === -1) continue; // reste sur le torse, immobile
-
-        const c = chains[bestChain];
-        activeIndices.push(i);
-        parentJoint[i] = c.parentJointIndex;
-        parentWeight[i] = THREE.MathUtils.smoothstep(bestS, c.def.sMin, c.def.sMin + BLEND_ATTACH);
-        if (c.hasChild) {
-          childJoint[i] = c.childJointIndex;
-          childWeight[i] = THREE.MathUtils.smoothstep(bestS, c.childS - BLEND_JOINT, c.childS + BLEND_JOINT);
-        }
-      }
-
-      mesh.userData.rig = {
-        basePositions: Float32Array.from(posAttr.array),
-        joints,
-        activeIndices,
-        parentJoint, parentWeight, childJoint, childWeight,
-        draggingJoint: -1,
-      };
     }
-
-    // Applique la pose courante du rig aux positions des sommets concernés :
-    // pour chaque sommet, on part de la position de repos, on applique
-    // d'abord la rotation de l'articulation distale (genou/coude) autour de
-    // son pivot de repos, PUIS la rotation de l'articulation proche du corps
-    // (hanche/épaule) autour de son pivot — exactement comme un vrai
-    // squelette hiérarchique (plier la hanche entraîne aussi le genou).
-    const _tmpV = new THREE.Vector3();
-    const _tmpQYaw = new THREE.Quaternion();
-    const _tmpQPitch = new THREE.Quaternion();
-    const _tmpQ = new THREE.Quaternion();
-    function applyJoint(pos, joint, weight) {
-      if (weight < 0.0004) return;
-      _tmpQYaw.setFromAxisAngle(joint.axisA, joint.current.yaw * weight);
-      _tmpQPitch.setFromAxisAngle(joint.axisB, joint.current.pitch * weight);
-      _tmpQ.copy(_tmpQYaw).multiply(_tmpQPitch);
-      pos.sub(joint.pivot).applyQuaternion(_tmpQ).add(joint.pivot);
+  } else if (age < 3.6) {
+    // step 5 — the core opens
+    const p = (age - 2.8) / 0.8;
+    coreMesh.scale.setScalar(1 - p * 0.6);
+    coreGlow.material.opacity = 0.3 + p * 0.5;
+  } else {
+    // step 6 — a new form appears
+    if (!constellationCompletion.rewardSpawned) {
+      constellationCompletion.rewardSpawned = true;
+      spawnCoreReward();
     }
+    constellationCompletion = null;
+  }
+}
 
-    function updateLimbGeometry(mesh) {
-      const rig = mesh.userData.rig;
-      if (!rig) return false;
+function spawnCoreReward() {
+  coreMesh.visible = false;
+  coreGlow.visible = false;
 
-      const anyActive = rig.joints.some((j) => Math.abs(j.current.yaw) > 0.0004 || Math.abs(j.current.pitch) > 0.0004);
-      if (!anyActive) return false;
+  coreRewardGroup = new THREE.Group();
+  const geo = new THREE.IcosahedronGeometry(0.4, 1);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0x9fd8ff,
+    emissiveIntensity: 1.2,
+    flatShading: true,
+  });
+  coreRewardGroup.add(new THREE.Mesh(geo, mat));
 
-      const posAttr = mesh.geometry.attributes.position;
-      for (let k = 0; k < rig.activeIndices.length; k++) {
-        const i = rig.activeIndices[k];
-        _tmpV.set(rig.basePositions[i * 3], rig.basePositions[i * 3 + 1], rig.basePositions[i * 3 + 2]);
+  const glowGeo = new THREE.IcosahedronGeometry(0.7, 1);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x5ee7ff,
+    transparent: true,
+    opacity: 0.35,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  coreRewardGroup.add(new THREE.Mesh(glowGeo, glowMat));
 
-        const cj = rig.childJoint[i];
-        if (cj !== -1) applyJoint(_tmpV, rig.joints[cj], rig.childWeight[i]);
+  // two tiny satellite spheres orbiting the reward, plus a thin ring
+  for (let i = 0; i < 2; i++) {
+    const satGeo = new THREE.SphereGeometry(0.06, 8, 8);
+    const satMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const sat = new THREE.Mesh(satGeo, satMat);
+    sat.userData.orbitOffset = i * Math.PI;
+    coreRewardGroup.add(sat);
+  }
+  const ringGeo = new THREE.RingGeometry(0.55, 0.58, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x5ee7ff,
+    transparent: true,
+    opacity: 0.4,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = 1.2;
+  coreRewardGroup.add(ring);
 
-        const pj = rig.parentJoint[i];
-        if (pj !== -1) applyJoint(_tmpV, rig.joints[pj], rig.parentWeight[i]);
+  coreRewardGroup.scale.setScalar(0);
+  constellationGroup.add(coreRewardGroup);
+  showCenterMessage('CORE FORMED');
 
-        posAttr.setXYZ(i, _tmpV.x, _tmpV.y, _tmpV.z);
-      }
+  const startTime = clock.getElapsedTime();
+  function grow() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 1.4, 1);
+    const eased = 1 - Math.pow(1 - p, 3);
+    coreRewardGroup.scale.setScalar(eased);
+    if (p < 1) requestAnimationFrame(grow);
+  }
+  grow();
+}
 
-      posAttr.needsUpdate = true;
-      mesh.geometry.computeVertexNormals();
-      return true;
+function collectCoreReward() {
+  if (!coreRewardGroup || coreRewardGroup.userData.collected) return;
+  coreRewardGroup.userData.collected = true;
+  spawnCursorRipple();
+
+  const startPos = coreRewardGroup.position.clone();
+  const startTime = clock.getElapsedTime();
+  function collectAnim() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.7, 1);
+    const eased = p * p;
+    coreRewardGroup.position.lerpVectors(startPos, camera.position, eased * 0.5);
+    coreRewardGroup.scale.setScalar(Math.max(0, 1 - eased));
+    if (p < 1) {
+      requestAnimationFrame(collectAnim);
+    } else {
+      coreRewardGroup.visible = false;
+      gameState.collectedCores += 1;
+      updateFragmentUI();
+      saveGame();
+      revealReturnPortal();
     }
+  }
+  collectAnim();
+}
 
-    // Raycasting : détermine quelle articulation (le cas échéant) est sous
-    // le pointeur. Un sommet peut être influencé par 2 articulations (ex :
-    // hanche + genou) ; on choisit celle qui est la plus "engagée" à cet
-    // endroit précis (poids le plus fort) — cliquer près du pied attrape
-    // le genou, cliquer près de la cuisse attrape la hanche.
-    const raycaster = new THREE.Raycaster();
-    const pointerNDC = new THREE.Vector2();
-    function pickLimb(event) {
-      if (!character) return null;
-      const rect = renderer.domElement.getBoundingClientRect();
-      pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(pointerNDC, camera);
-      const hits = raycaster.intersectObject(character, true);
-      if (hits.length === 0 || !hits[0].face) return null;
-      const mesh = hits[0].object;
-      const rig = mesh.userData.rig;
-      if (!rig) return null;
-      const vi = hits[0].face.a;
-      const pj = rig.parentJoint[vi], pw = rig.parentWeight[vi];
-      const cj = rig.childJoint[vi], cw = rig.childWeight[vi];
-      if (pj === -1 && cj === -1) return null;
-      const jointIndex = cw > pw ? cj : pj;
-      if (jointIndex === -1) return null;
-      return { mesh, rig, joint: rig.joints[jointIndex] };
-    }
+/* ----------------------------------------------------------
+   Return portal (section 23)
+---------------------------------------------------------- */
+function createReturnPortalObject() {
+  returnPortalGroup = new THREE.Group();
+  returnPortalGroup.position.set(0, -2, 5.5);
+  returnPortalGroup.visible = false;
 
-    let draggingRig = null;
-    let draggingJoint = null;
-    let dragStartX = 0, dragStartY = 0;
-    let dragStartYaw = 0, dragStartPitch = 0;
+  const ringGeo = new THREE.TorusGeometry(1.1, 0.06, 10, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xff8a3d,
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  returnPortalGroup.add(new THREE.Mesh(ringGeo, ringMat));
 
-    renderer.domElement.addEventListener("pointerdown", (event) => {
-      const pick = pickLimb(event);
-      if (pick) {
-        draggingRig = pick.rig;
-        draggingJoint = pick.joint;
-        dragStartX = event.clientX;
-        dragStartY = event.clientY;
-        dragStartYaw = draggingJoint.current.yaw;
-        dragStartPitch = draggingJoint.current.pitch;
-        controls.enabled = false;
-        renderer.domElement.setPointerCapture(event.pointerId);
-        renderer.domElement.style.cursor = "grabbing";
+  const discGeo = new THREE.CircleGeometry(1.0, 32);
+  const discMat = new THREE.MeshBasicMaterial({
+    color: 0xff8a3d,
+    transparent: true,
+    opacity: 0.2,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  returnPortalDisc = new THREE.Mesh(discGeo, discMat);
+  returnPortalGroup.add(returnPortalDisc);
+
+  constellationGroup.add(returnPortalGroup);
+}
+
+function revealReturnPortal() {
+  returnPortalGroup.visible = true;
+}
+
+/* ----------------------------------------------------------
+   Per-frame constellation update
+---------------------------------------------------------- */
+function updateConstellationZone(t) {
+  if (activeZone !== 'constellation' && !zoneTransition) return;
+
+  // idle auto-drift so the constellation feels like it's floating (section 17)
+  if (interactionMode !== 'rotate') {
+    constellationGroup.rotation.y += CONFIG.constellation.cameraIdleSpeed;
+  }
+
+  coreMesh.rotation.y += 0.003;
+  const breathe = 1 + Math.sin(t * 0.6) * 0.05;
+  if (coreGlow.visible) coreGlow.scale.setScalar(breathe);
+
+  constellationPoints.forEach((pt) => {
+    const isHovered = pt === hoveredConstellationPoint;
+    const basePulse = pt.userData.connected ? 0.35 : (pt.userData.pulsePhase !== undefined ? 0.05 : 0);
+    const pulse = Math.sin(t * 1.6 + pt.userData.pulsePhase) * basePulse;
+    const targetOpacity = (pt.userData.connected ? 0.85 : 0.2) + pulse + (isHovered ? 0.4 : 0);
+    pt.material.opacity = THREE.MathUtils.clamp(targetOpacity, 0.05, 1);
+    const s = isHovered ? 1.7 : pt.userData.connected ? 1.3 : 1;
+    pt.scale.setScalar(s);
+    pt.userData.halo.material.opacity = pt.material.opacity * 0.6;
+  });
+
+  if (returnPortalGroup.visible) {
+    returnPortalGroup.children[0].rotation.z += 0.006;
+    const idle = 1 + Math.sin(t * 1.2) * 0.05;
+    returnPortalDisc.material.opacity = 0.2 + Math.sin(t * 1.5) * 0.05;
+    returnPortalGroup.scale.setScalar(idle);
+  }
+
+  if (coreRewardGroup && coreRewardGroup.visible && !coreRewardGroup.userData.collected) {
+    coreRewardGroup.rotation.y += 0.01;
+    coreRewardGroup.children.forEach((child, i) => {
+      if (child.userData.orbitOffset !== undefined) {
+        const a = t * 1.4 + child.userData.orbitOffset;
+        child.position.set(Math.cos(a) * 0.75, Math.sin(a) * 0.3, Math.sin(a) * 0.75);
       }
     });
+  }
 
-    renderer.domElement.addEventListener("pointermove", (event) => {
-      if (draggingJoint) {
-        const dx = event.clientX - dragStartX;
-        const dy = event.clientY - dragStartY;
-        const yaw = THREE.MathUtils.clamp(dragStartYaw + dx * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
-        const pitch = THREE.MathUtils.clamp(dragStartPitch - dy * DRAG_SENSITIVITY, -MAX_LIMB_ANGLE, MAX_LIMB_ANGLE);
-        draggingJoint.current.yaw = yaw;
-        draggingJoint.current.pitch = pitch;
-        draggingJoint.target.yaw = yaw;
-        draggingJoint.target.pitch = pitch;
-      } else if (character) {
-        // survol : curseur "grab" au-dessus d'un membre déplaçable
-        const pick = pickLimb(event);
-        renderer.domElement.style.cursor = pick ? "grab" : "default";
-      }
+  updateConstellationCompletionAnim(t);
+}
+
+/* ================================================================
+   V4 — GRAVITY ZONE
+   A physics-driven zone: nuclei with position/velocity/mass, pulled
+   by a custom simplified gravity toward the Gravity Core, nudged by
+   the player through attraction/repulsion cursor fields.
+================================================================ */
+let gravityCore, gravityCoreGlow;
+let gravityNuclei = [];
+let gravityOrbitRings = [];
+let gravitySeedGroup = null;
+let gravityReturnPortalGroup = null, gravityReturnPortalDisc = null;
+let hoveredNucleus = null;
+let hoveredGravitySeed = false;
+let hoveredGravityReturnPortal = false;
+let draggedNucleus = null;
+let shiftHeld = false;
+let hasSeenGravityHint = false;
+let gravityCompletion = null;
+const gravityState = { stability: 0, lockedCount: 0 };
+const secretDrag = { active: false, shiftAtStart: false, pulledIds: new Set() };
+
+function createGravityZone() {
+  gravityGroup = new THREE.Group();
+  gravityGroup.visible = false;
+  scene.add(gravityGroup);
+
+  // warm, dense background — the visual opposite of Constellation
+  const count = 1800;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = 55 * (0.3 + Math.random() * 0.7);
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xffb37a,
+    size: 0.05,
+    transparent: true,
+    opacity: 0.5,
+    sizeAttenuation: true,
+  });
+  gravityGroup.add(new THREE.Points(geo, mat));
+
+  // a couple of large, distant, softly-lit spheres for depth (section 5)
+  [[-20, 8, -30, 3.5, 0x3a1a4a], [18, -10, -35, 4.5, 0x5a2410]].forEach(([x, y, z, r, color]) => {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 16, 16),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 })
+    );
+    m.position.set(x, y, z);
+    gravityGroup.add(m);
+  });
+
+  // zone-local warm lights
+  const warmLight = new THREE.PointLight(0xff8a3d, 2.2, 30);
+  warmLight.position.set(4, 3, 4);
+  gravityGroup.add(warmLight);
+  const violetLight = new THREE.PointLight(0x6b2fb0, 1.6, 30);
+  violetLight.position.set(-5, -2, -3);
+  gravityGroup.add(violetLight);
+
+  createGravityCore();
+  createGravityOrbitRings();
+  createGravityNuclei();
+  createGravityReturnPortalObject();
+}
+
+function createGravityCore() {
+  const cfg = CONFIG.gravity;
+  // slightly deformed icosahedron — "densité, masse, énergie comprimée"
+  const geo = new THREE.IcosahedronGeometry(cfg.coreRadius, 2);
+  const posAttr = geo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const v = new THREE.Vector3().fromBufferAttribute(posAttr, i);
+    const bump = 1 + (Math.sin(v.x * 3) * Math.cos(v.y * 2) * Math.sin(v.z * 4)) * 0.06;
+    v.multiplyScalar(bump);
+    posAttr.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x1a0e08,
+    emissive: cfg.coreColor,
+    emissiveIntensity: 0.9,
+    metalness: 0.4,
+    roughness: 0.5,
+    flatShading: true,
+  });
+  gravityCore = new THREE.Mesh(geo, mat);
+  gravityGroup.add(gravityCore);
+
+  const glowGeo = new THREE.IcosahedronGeometry(cfg.coreRadius * 1.35, 1);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: cfg.coreColor,
+    transparent: true,
+    opacity: 0.3,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  gravityCoreGlow = new THREE.Mesh(glowGeo, glowMat);
+  gravityGroup.add(gravityCoreGlow);
+}
+
+function createGravityOrbitRings() {
+  CONFIG.gravity.orbitRings.forEach((cfg) => {
+    const geo = new THREE.TorusGeometry(cfg.radius, 0.02, 8, 64);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffcf9e,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
+    const ring = new THREE.Mesh(geo, mat);
+    ring.rotation.x = cfg.tiltX;
+    ring.rotation.z = cfg.tiltZ;
+    ring.userData = { radius: cfg.radius, occupied: false, baseOpacity: 0.22 };
+    gravityGroup.add(ring);
+    gravityOrbitRings.push(ring);
+  });
+}
 
-    function releaseLimb() {
-      if (draggingJoint) {
-        draggingJoint.target.yaw = 0;
-        draggingJoint.target.pitch = 0;
-        draggingRig = null;
-        draggingJoint = null;
-        controls.enabled = true;
-        renderer.domElement.style.cursor = "default";
-      }
-    }
-    renderer.domElement.addEventListener("pointerup", releaseLimb);
-    renderer.domElement.addEventListener("pointercancel", releaseLimb);
-    renderer.domElement.addEventListener("pointerleave", releaseLimb);
+function idealOrbitSpeed(radius) {
+  return Math.sqrt((CONFIG.gravity.G * CONFIG.gravity.coreMass) / radius);
+}
 
-    let character = null;
-    let floatBase = 0;
+function createGravityNuclei() {
+  const count = CONFIG.gravity.nucleusCount;
+  for (let i = 0; i < count; i++) {
+    const mass = 0.6 + Math.random() * 1.6;
+    const radius = 0.14 + mass * 0.05;
+    const dist = 3.5 + Math.random() * 4.5;
+    const theta = Math.random() * Math.PI * 2;
+    const y = (Math.random() - 0.5) * 3;
+    const pos = new THREE.Vector3(Math.cos(theta) * dist, y, Math.sin(theta) * dist);
 
-    const fbxLoader = new FBXLoader();
-    fbxLoader.load(
-      MODEL_URL,
-      (object) => {
-        character = object;
-
-        // Remplace le matériau d'origine (texture patchwork) par un rendu
-        // "figurine" mate : noir + dégradé bleu par vertex colors, et
-        // prépare le rig de membres articulés (drag pour bouger).
-        character.traverse((child) => {
-          if (child.isMesh) {
-            child.castShadow = true;
-            child.receiveShadow = true;
-            setupCharacterMesh(child);
-            child.material = new THREE.MeshStandardMaterial({
-              vertexColors: true,
-              metalness: 0.0,
-              roughness: 0.75,
-              envMapIntensity: 0.5,
-            });
-          }
-        });
-
-        // Centre et met à l'échelle le modèle pour qu'il tienne dans le cadre,
-        // quelle que soit l'échelle d'origine du FBX
-        const box = new THREE.Box3().setFromObject(character);
-        const size = new THREE.Vector3();
-        const center = new THREE.Vector3();
-        box.getSize(size);
-        box.getCenter(center);
-
-        const maxDim = Math.max(size.x, size.y, size.z);
-        const targetHeight = 2.1;
-        const scale = targetHeight / maxDim;
-        character.scale.setScalar(scale);
-
-        // recalcule la bounding box après mise à l'échelle pour un centrage précis
-        const box2 = new THREE.Box3().setFromObject(character);
-        const size2 = new THREE.Vector3();
-        const center2 = new THREE.Vector3();
-        box2.getSize(size2);
-        box2.getCenter(center2);
-
-        character.position.x -= center2.x;
-        character.position.z -= center2.z;
-        character.position.y -= box2.min.y; // pose les pieds au sol (y = 0)
-
-        floatBase = character.position.y;
-
-        // recentre la cible des contrôles sur le milieu du personnage
-        controls.target.set(0, size2.y * 0.55, 0);
-        controls.update();
-
-        scene.add(character);
-
-        loadingEl.classList.add("hidden");
-      },
-      (xhr) => {
-        if (xhr.total) {
-          const pct = Math.min(100, Math.round((xhr.loaded / xhr.total) * 100));
-          loadingText.textContent = `Chargement du personnage… ${pct}%`;
-        }
-      },
-      (error) => {
-        console.error("Erreur de chargement du FBX :", error);
-        loadingText.textContent = "Erreur de chargement du modèle.";
-      }
+    // a roughly-tangential starting velocity, deliberately imprecise —
+    // the player has to correct it into a real orbit
+    const tangent = new THREE.Vector3(-pos.z, 0, pos.x).normalize();
+    const speed = idealOrbitSpeed(dist) * (0.55 + Math.random() * 0.9);
+    const velocity = tangent.multiplyScalar(speed).add(
+      new THREE.Vector3((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.4)
     );
 
-    // ---------------------------------------------------------------
-    // Boucle d'animation
-    // ---------------------------------------------------------------
-    const clock = new THREE.Clock();
-    let elapsedTime = 0;
+    const geo = new THREE.IcosahedronGeometry(radius, 1);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x2a1408,
+      emissive: 0xff9a4d,
+      emissiveIntensity: 0.7,
+      flatShading: true,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(pos);
 
-    function animate() {
-      requestAnimationFrame(animate);
-      const deltaTime = Math.min(0.05, clock.getDelta());
-      elapsedTime += deltaTime;
-      const t = elapsedTime;
+    const haloMat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(),
+      color: 0xffb37a,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const halo = new THREE.Sprite(haloMat);
+    halo.scale.set(radius * 6, radius * 6, 1);
+    mesh.add(halo);
 
-      // flottement du personnage
-      if (character) {
-        character.position.y = floatBase + Math.sin(t * 1.2) * 0.06;
-        character.rotation.z = Math.sin(t * 0.8) * 0.015;
+    mesh.userData = {
+      id: i,
+      velocity,
+      mass,
+      radius,
+      halo,
+      locked: false,
+      lockedRing: null,
+      orbitTimer: 0,
+      merging: false,
+    };
 
-        // retour élastique des membres relâchés + application de la pose
-        character.traverse((child) => {
-          if (child.isMesh && child.userData.rig) {
-            const rig = child.userData.rig;
-            const k = 1 - Math.exp(-SPRING_SPEED * deltaTime);
-            for (const joint of rig.joints) {
-              // pendant le drag, current === target déjà (mis à jour dans pointermove),
-              // donc ce lerp ne bouge rien pour l'articulation en cours de manipulation
-              joint.current.yaw += (joint.target.yaw - joint.current.yaw) * k;
-              joint.current.pitch += (joint.target.pitch - joint.current.pitch) * k;
-            }
-            updateLimbGeometry(child);
-          }
-        });
-      }
+    gravityGroup.add(mesh);
+    gravityNuclei.push(mesh);
+  }
+}
 
-      // dérive douce des particules (flottement + rotation lente autour du perso)
-      const posAttr = particleGeometry.attributes.position;
-      for (let i = 0; i < PARTICLE_COUNT; i++) {
-        const angle = angles[i] + t * 0.06 * (i % 2 === 0 ? 1 : -1);
-        const bob = Math.sin(t * 0.6 + seeds[i]) * 0.15;
-        posAttr.array[i * 3] = Math.cos(angle) * radii[i];
-        posAttr.array[i * 3 + 1] = heights[i] + bob;
-        posAttr.array[i * 3 + 2] = Math.sin(angle) * radii[i];
-      }
-      posAttr.needsUpdate = true;
+/* ----------------------------------------------------------
+   Physics (sections 7, 30) — simplified, delta-time based
+---------------------------------------------------------- */
+function updateGravityPhysics(delta) {
+  if (activeZone !== 'gravity' || zoneTransition) return;
+  const cfg = CONFIG.gravity;
+  const dt = Math.min(delta, 0.05); // clamp to avoid big jumps after a tab switch
 
-      // scintillement léger de l'opacité globale
-      particleMaterial.opacity = 0.75 + Math.sin(t * 2.0) * 0.15;
+  gravityNuclei.forEach((n) => {
+    if (n.userData.merging) return;
+    const ud = n.userData;
 
-      controls.update();
-      renderer.render(scene, camera);
+    if (ud.locked && !gravityCompletion) {
+      // locked nuclei coast on a clean analytic circular orbit instead of
+      // accumulating simulation error — this is what keeps them "in place"
+      const ring = ud.lockedRing;
+      const speed = idealOrbitSpeed(ring.userData.radius);
+      ud.orbitAngle += (speed / ring.userData.radius) * dt;
+      const localPos = new THREE.Vector3(
+        Math.cos(ud.orbitAngle) * ring.userData.radius,
+        Math.sin(ud.orbitAngle) * ring.userData.radius,
+        0
+      ).applyEuler(ring.rotation);
+      n.position.copy(localPos);
+      return;
     }
-    animate();
 
-    // ---------------------------------------------------------------
-    // Responsive
-    // ---------------------------------------------------------------
-    function onResize() {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      camera.aspect = w / h;
-
-      // Sur mobile (portrait), on recule un peu la caméra pour garder
-      // le personnage entier dans le cadre
-      const isPortrait = h > w;
-      camera.position.setLength(isPortrait ? 5.4 : 4.2);
-
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+    if (n === draggedNucleus) {
+      // player-controlled cursor field (attract or repulse)
+      const dir = cursorFieldWorld.clone().sub(n.position);
+      const dist = Math.max(dir.length(), 0.3);
+      if (dist < cfg.cursorFieldRadius) {
+        const strength = cfg.cursorFieldStrength * (1 - dist / cfg.cursorFieldRadius);
+        const sign = shiftHeld ? -1 : 1;
+        ud.velocity.add(dir.normalize().multiplyScalar(sign * strength * dt));
+      }
     }
-    window.addEventListener("resize", onResize);
-    window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
-    onResize();
-  </script>
+
+    // gravity toward the core (local space, core sits at origin)
+    const toCore = n.position.clone().negate();
+    const dist = Math.max(toCore.length(), 0.6);
+    const forceMag = (cfg.G * cfg.coreMass * ud.mass) / (dist * dist);
+    const accel = toCore.normalize().multiplyScalar(forceMag / ud.mass);
+    ud.velocity.add(accel.multiplyScalar(dt));
+
+    // gentle friction so the system settles rather than spiraling forever
+    const frictionFactor = Math.exp(-cfg.friction * dt);
+    ud.velocity.multiplyScalar(frictionFactor);
+
+    n.position.add(ud.velocity.clone().multiplyScalar(dt));
+
+    checkOrbit(n, dt);
+  });
+
+  checkGravityCollisions();
+}
+
+function checkOrbit(nucleus, dt) {
+  const cfg = CONFIG.gravity;
+  const ud = nucleus.userData;
+  const dist = nucleus.position.length();
+  const speed = ud.velocity.length();
+
+  let matchedRing = null;
+  gravityOrbitRings.forEach((ring) => {
+    if (ring.userData.occupied) return;
+    const radiusOk = Math.abs(dist - ring.userData.radius) < cfg.orbitRadiusTolerance;
+    const ideal = idealOrbitSpeed(ring.userData.radius);
+    const speedOk = Math.abs(speed - ideal) / ideal < cfg.orbitSpeedTolerance;
+    if (radiusOk && speedOk) matchedRing = ring;
+  });
+
+  if (matchedRing) {
+    ud.orbitTimer += dt;
+    if (ud.orbitTimer >= cfg.lockDuration) {
+      lockNucleusIntoOrbit(nucleus, matchedRing);
+    }
+  } else {
+    ud.orbitTimer = Math.max(0, ud.orbitTimer - dt * 2);
+  }
+}
+
+function checkStillLocked(nucleus) {
+  // no-op: locked nuclei now orbit analytically (see updateGravityPhysics)
+}
+
+function lockNucleusIntoOrbit(nucleus, ring) {
+  const ud = nucleus.userData;
+  ud.locked = true;
+  ud.lockedRing = ring;
+  ring.userData.occupied = true;
+
+  // snap onto the ring's own (possibly tilted) plane for a clean, stable orbit
+  const r = ring.userData.radius;
+  ud.orbitAngle = Math.atan2(nucleus.position.z, nucleus.position.x);
+  const localPos = new THREE.Vector3(
+    Math.cos(ud.orbitAngle) * r,
+    Math.sin(ud.orbitAngle) * r,
+    0
+  ).applyEuler(ring.rotation);
+  nucleus.position.copy(localPos);
+  ud.velocity.set(0, 0, 0);
+
+  spawnGravityPulse(localPos.clone());
+  ring.userData.pulseUntil = clock.getElapsedTime() + 1.0;
+
+  gravityState.lockedCount = gravityOrbitRings.filter((r2) => r2.userData.occupied).length;
+  gravityState.stability = gravityState.lockedCount / gravityOrbitRings.length;
+  saveGame();
+
+  if (gravityState.lockedCount >= gravityOrbitRings.length && !gravityCompletion && !gravitySeedGroup) {
+    triggerGravityCompletion();
+  }
+}
+
+function spawnGravityPulse(position) {
+  const geo = new THREE.SphereGeometry(0.05, 8, 8);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 1,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const pulse = new THREE.Mesh(geo, mat);
+  pulse.position.copy(position);
+  gravityGroup.add(pulse);
+  const startTime = clock.getElapsedTime();
+  function grow() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.8, 1);
+    const s = 1 + p * 10;
+    pulse.scale.setScalar(s);
+    mat.opacity = 1 - p;
+    if (p < 1) {
+      requestAnimationFrame(grow);
+    } else {
+      gravityGroup.remove(pulse);
+      geo.dispose();
+      mat.dispose();
+    }
+  }
+  grow();
+}
+
+/* ----------------------------------------------------------
+   Collisions & fusion (sections 16, 17)
+---------------------------------------------------------- */
+function checkGravityCollisions() {
+  for (let i = 0; i < gravityNuclei.length; i++) {
+    const a = gravityNuclei[i];
+    if (a.userData.merging || a.userData.locked) continue;
+    for (let j = i + 1; j < gravityNuclei.length; j++) {
+      const b = gravityNuclei[j];
+      if (b.userData.merging || b.userData.locked) continue;
+      const dist = a.position.distanceTo(b.position);
+      if (dist < (a.userData.radius + b.userData.radius) * CONFIG.gravity.mergeFactor) {
+        mergeNuclei(a, b);
+        return; // one merge per frame keeps things predictable
+      }
+    }
+  }
+}
+
+function mergeNuclei(a, b) {
+  const big = a.userData.mass >= b.userData.mass ? a : b;
+  const small = big === a ? b : a;
+  big.userData.merging = true;
+  small.userData.merging = true;
+
+  const startTime = clock.getElapsedTime();
+  const startBig = big.position.clone();
+  const startSmall = small.position.clone();
+
+  function spiral() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.6, 1);
+    const mid = startBig.clone().lerp(startSmall, 0.5 * p);
+    small.position.lerpVectors(startSmall, mid, p);
+    small.scale.setScalar(1 - p);
+    if (p < 1) {
+      requestAnimationFrame(spiral);
+    } else {
+      gravityGroup.remove(small);
+      gravityNuclei = gravityNuclei.filter((n) => n !== small);
+
+      const newMass = big.userData.mass + small.userData.mass;
+      const newRadius = Math.cbrt(
+        Math.pow(big.userData.radius, 3) + Math.pow(small.userData.radius, 3)
+      );
+      big.userData.mass = newMass;
+      big.userData.radius = newRadius;
+      big.userData.merging = false;
+      const s = newRadius / (big.geometry.parameters.radius || newRadius);
+      big.scale.setScalar(Math.max(1, s));
+      spawnGravityPulse(big.position.clone());
+    }
+  }
+  spiral();
+}
+
+/* ----------------------------------------------------------
+   Attract / repulse dragging (sections 9, 10, 11)
+---------------------------------------------------------- */
+const cursorFieldWorld = new THREE.Vector3();
+
+function updateCursorFieldWorld(clientX, clientY, depth) {
+  raycastPoint.set(
+    (clientX / window.innerWidth) * 2 - 1,
+    -(clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(raycastPoint, camera);
+  const worldPos = raycaster.ray.origin.clone().add(
+    raycaster.ray.direction.clone().multiplyScalar(depth)
+  );
+  cursorFieldWorld.copy(gravityGroup.worldToLocal(worldPos));
+}
+
+/* ----------------------------------------------------------
+   Completion (sections 18–21): stability reaches 100%
+---------------------------------------------------------- */
+function triggerGravityCompletion() {
+  gravityCompletion = { startTime: clock.getElapsedTime() };
+}
+
+function updateGravityCompletionAnim(t) {
+  if (!gravityCompletion) return;
+  const age = t - gravityCompletion.startTime;
+
+  if (age < 0.6) {
+    // step 1 — the system briefly freezes
+  } else if (age < 1.6) {
+    const p = (age - 0.6) / 1.0;
+    gravityCore.material.emissiveIntensity = 0.9 + p * 3;
+    gravityCoreGlow.material.opacity = 0.3 + p * 0.6;
+    gravityOrbitRings.forEach((r) => (r.material.opacity = 0.22 + p * 0.5));
+  } else if (age < 2.4) {
+    if (!gravityCompletion.pulled) {
+      gravityCompletion.pulled = true;
+      gravityNuclei.forEach((n) => spawnGravityPulse(n.position.clone()));
+    }
+    const p = (age - 1.6) / 0.8;
+    gravityNuclei.forEach((n) => {
+      n.position.lerp(new THREE.Vector3(0, 0, 0), p * 0.02);
+    });
+  } else {
+    if (!gravityCompletion.seedSpawned) {
+      gravityCompletion.seedSpawned = true;
+      spawnGravitySeed();
+    }
+    gravityCompletion = null;
+  }
+}
+
+function spawnGravitySeed() {
+  gravitySeedGroup = new THREE.Group();
+  const geo = new THREE.IcosahedronGeometry(0.3, 1);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: 0xffb066,
+    emissiveIntensity: 1.3,
+    flatShading: true,
+  });
+  gravitySeedGroup.add(new THREE.Mesh(geo, mat));
+
+  const glowGeo = new THREE.IcosahedronGeometry(0.55, 1);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0xff8a3d,
+    transparent: true,
+    opacity: 0.35,
+    side: THREE.BackSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  gravitySeedGroup.add(new THREE.Mesh(glowGeo, glowMat));
+
+  gravitySeedGroup.scale.setScalar(0);
+  gravityGroup.add(gravitySeedGroup);
+  showCenterMessage('GRAVITY SEED FORMED');
+
+  const startTime = clock.getElapsedTime();
+  function grow() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 1.4, 1);
+    const eased = 1 - Math.pow(1 - p, 3);
+    gravitySeedGroup.scale.setScalar(eased);
+    if (p < 1) requestAnimationFrame(grow);
+  }
+  grow();
+}
+
+function collectGravitySeed() {
+  if (!gravitySeedGroup || gravitySeedGroup.userData.collected) return;
+  gravitySeedGroup.userData.collected = true;
+  spawnCursorRipple();
+
+  const startPos = gravitySeedGroup.position.clone();
+  const startTime = clock.getElapsedTime();
+  function collectAnim() {
+    const p = Math.min((clock.getElapsedTime() - startTime) / 0.7, 1);
+    const eased = p * p;
+    gravitySeedGroup.position.lerpVectors(startPos, camera.position, eased * 0.5);
+    gravitySeedGroup.scale.setScalar(Math.max(0, 1 - eased));
+    if (p < 1) {
+      requestAnimationFrame(collectAnim);
+    } else {
+      gravitySeedGroup.visible = false;
+      gameState.collectedGravitySeeds += 1;
+      updateFragmentUI();
+      saveGame();
+      gravityReturnPortalGroup.visible = true;
+    }
+  }
+  collectAnim();
+}
+
+function createGravityReturnPortalObject() {
+  gravityReturnPortalGroup = new THREE.Group();
+  gravityReturnPortalGroup.position.set(0, -2.5, 6);
+  gravityReturnPortalGroup.visible = false;
+
+  const ringGeo = new THREE.TorusGeometry(1.1, 0.06, 10, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x5ee7ff,
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  gravityReturnPortalGroup.add(new THREE.Mesh(ringGeo, ringMat));
+
+  const discGeo = new THREE.CircleGeometry(1.0, 32);
+  const discMat = new THREE.MeshBasicMaterial({
+    color: 0x5ee7ff,
+    transparent: true,
+    opacity: 0.2,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  gravityReturnPortalDisc = new THREE.Mesh(discGeo, discMat);
+  gravityReturnPortalGroup.add(gravityReturnPortalDisc);
+
+  gravityGroup.add(gravityReturnPortalGroup);
+}
+
+/* ----------------------------------------------------------
+   Hidden secret (sections 25, 26): hold shift, pull 3+ nuclei
+   close together near the cursor, then release them all at once
+---------------------------------------------------------- */
+function updateGravitySecretWatch() {
+  if (!shiftHeld || !draggedNucleus) {
+    secretDrag.active = false;
+    return;
+  }
+  secretDrag.active = true;
+  let closeCount = 0;
+  gravityNuclei.forEach((n) => {
+    if (n.position.distanceTo(cursorFieldWorld) < CONFIG.gravity.secretHoldRadius) {
+      closeCount += 1;
+    }
+  });
+  if (closeCount >= CONFIG.gravity.secretRequiredCount) {
+    secretDrag.readyToFire = true;
+  }
+}
+
+function checkSecretRelease() {
+  if (secretDrag.readyToFire && !gameState.secretsFound.includes('gravity_hidden_signal')) {
+    gameState.secretsFound.push('gravity_hidden_signal');
+    spawnGravityPulse(cursorFieldWorld.clone());
+    // an extremely subtle acknowledgement — no explanation
+    gravityCoreGlow.material.opacity = Math.min(gravityCoreGlow.material.opacity + 0.15, 0.7);
+    saveGame();
+  }
+  secretDrag.readyToFire = false;
+  secretDrag.active = false;
+}
+
+/* ----------------------------------------------------------
+   UI hint sequence (section 33): PULL, then RELEASE
+---------------------------------------------------------- */
+function showGravityFirstHint() {
+  if (hasSeenGravityHint) return;
+  hasSeenGravityHint = true;
+  const hint = document.getElementById('drag-hint');
+  hint.textContent = 'PULL';
+  hint.classList.remove('hidden');
+  setTimeout(() => {
+    hint.textContent = 'RELEASE';
+  }, 2200);
+  setTimeout(() => {
+    hint.classList.add('hidden');
+  }, 4400);
+}
+
+/* ----------------------------------------------------------
+   Per-frame gravity zone update
+---------------------------------------------------------- */
+function updateGravityZone(t, delta) {
+  if (activeZone !== 'gravity' && !zoneTransition) return;
+
+  gravityCore.rotation.y += 0.002;
+  const breathe = 1 + Math.sin(t * 0.4) * 0.04 + gravityState.stability * 0.05;
+  gravityCoreGlow.scale.setScalar(breathe);
+  if (!gravityCompletion) {
+    gravityCore.material.emissiveIntensity = 0.9 + gravityState.stability * 0.8;
+  }
+
+  gravityOrbitRings.forEach((ring) => {
+    ring.rotation.z += 0.002;
+    if (ring.userData.pulseUntil && t < ring.userData.pulseUntil) {
+      ring.material.opacity = 0.5 + Math.sin(t * 10) * 0.2;
+    } else {
+      ring.material.opacity = ring.userData.occupied ? 0.5 : ring.userData.baseOpacity;
+    }
+  });
+
+  gravityNuclei.forEach((n) => {
+    const isHovered = n === hoveredNucleus;
+    const s = isHovered ? 1.3 : n.userData.locked ? 1.1 : 1;
+    n.scale.setScalar(s * (n.userData.merging ? n.scale.x : 1));
+    n.userData.halo.material.opacity = n.userData.locked ? 0.6 : isHovered ? 0.6 : 0.3;
+    n.rotation.y += 0.01;
+  });
+
+  if (gravitySeedGroup && gravitySeedGroup.visible && !gravitySeedGroup.userData.collected) {
+    gravitySeedGroup.rotation.y += 0.012;
+    gravitySeedGroup.position.y = 0.4 + Math.sin(t * 0.9) * 0.2;
+  }
+
+  if (gravityReturnPortalGroup && gravityReturnPortalGroup.visible) {
+    gravityReturnPortalGroup.children[0].rotation.z += 0.006;
+    gravityReturnPortalDisc.material.opacity = 0.2 + Math.sin(t * 1.5) * 0.05;
+  }
+
+  updateGravityPhysics(delta);
+  updateGravityCompletionAnim(t);
+}
+
+/* ----------------------------------------------------------
+   Hub remembers, part 2 (section 24) — the Gravity Seed subtly
+   influences the hub once it's brought back
+---------------------------------------------------------- */
+let hubGravitySeedSpawned = false;
+function spawnHubGravitySeedObject() {
+  if (hubGravitySeedSpawned) return;
+  hubGravitySeedSpawned = true;
+  createOrbitalObject('gravitySeed', {
+    position: [5.2, -2.5, -3.5],
+    radius: 0.2,
+    color: 0xffffff,
+    glowColor: 0xff8a3d,
+    orbitRadius: 0.35,
+    orbitSpeed: 0.22,
+  });
+  orbitalObjects.gravitySeed.userData.collected = false;
+  orbitalObjects.gravitySeed.userData.isHubTrophy = true;
+  // one ring warps slightly to show the hub is being pulled on (section 24)
+  if (ringMeshes[0]) ringMeshes[0].userData.speed *= 1.6;
+  spawnVoidTeaser();
+}
+
+/* ----------------------------------------------------------
+   A very quiet foreshadowing of the next zone (section 39) —
+   not interactive, barely noticeable, far from everything else.
+---------------------------------------------------------- */
+let voidTeaserSpawned = false;
+function spawnVoidTeaser() {
+  if (voidTeaserSpawned) return;
+  voidTeaserSpawned = true;
+  const geo = new THREE.SphereGeometry(0.3, 16, 16);
+  const mat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const teaser = new THREE.Mesh(geo, mat);
+  teaser.position.set(-16, 6, -18);
+  hubGroup.add(teaser);
+}
+
+let hubCoreSpawned = false;
+function spawnHubCoreObject() {
+  if (hubCoreSpawned) return;
+  hubCoreSpawned = true;
+  createOrbitalObject('core', {
+    position: [-4.5, 3.8, 4.2],
+    radius: 0.22,
+    color: 0xffffff,
+    glowColor: 0x9fd8ff,
+    orbitRadius: 0.4,
+    orbitSpeed: 0.28,
+  });
+  orbitalObjects.core.userData.collected = false;
+  orbitalObjects.core.userData.isHubTrophy = true;
+  // a small visible sign that the planet has changed (section 24)
+  glowMesh.material.opacity = Math.min(CONFIG.planet.glowOpacity * 1.3, 0.5);
+  ringMeshes.forEach((r) => (r.userData.baseOpacity = Math.min(r.userData.baseOpacity * 1.15, 0.6)));
+}
+
+/* ----------------------------------------------------------
+   Persistence (section 25)
+---------------------------------------------------------- */
+const SAVE_KEY = 'interactiveUniverseSave';
+
+function saveGame() {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      discoveredNodes: gameState.discoveredNodes,
+      discoveries: gameState.discoveries,
+      unlocked: gameState.unlocked,
+      crystalCollected: gameState.crystalCollected,
+      collectedFragments: gameState.collectedFragments,
+      portalActive: gameState.portalActive,
+      secretZoneRevealed: gameState.secretZoneRevealed,
+      collectedCores: gameState.collectedCores,
+      constellationProgress: gameState.constellationProgress,
+      // V4
+      gravityUnlocked: gameState.gravityUnlocked,
+      collectedGravitySeeds: gameState.collectedGravitySeeds,
+      secretsFound: gameState.secretsFound,
+      gravityLockedRings: gravityOrbitRings
+        .map((r, i) => (r.userData.occupied ? i : null))
+        .filter((i) => i !== null),
+    }));
+  } catch (e) {
+    /* localStorage unavailable — progress just won't persist */
+  }
+}
+
+function loadGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function applyLoadedState(saved) {
+  if (!saved) return;
+
+  // discovery nodes — reapply instantly, no animation
+  (saved.discoveredNodes || []).forEach((id) => {
+    const node = nodeMeshes.find((n) => n.userData.id === id);
+    if (node && !node.userData.discovered) {
+      node.userData.discovered = true;
+      node.material.color.setHex(CONFIG.nodes.activeColor);
+      node.material.opacity = 1;
+      node.userData.halo.material.opacity = 0.8;
+    }
+  });
+  gameState.discoveredNodes = saved.discoveredNodes || [];
+  gameState.discoveries = saved.discoveries || 0;
+
+  if (saved.unlocked) {
+    gameState.unlocked = true;
+    crystalGroup.userData.spawnTime = 0;
+    crystalGroup.scale.setScalar(saved.crystalCollected ? 0 : 1);
+    if (saved.crystalCollected) {
+      crystalGroup.userData.collected = true;
+      crystalGroup.visible = false;
+      gameState.crystalCollected = true;
+    }
+  }
+
+  if (saved.collectedFragments >= 1) {
+    gameState.collectedFragments = saved.collectedFragments;
+    orbitalObjects.fragment.userData.collected = true;
+    orbitalObjects.fragment.visible = false;
+  }
+
+  if (saved.secretZoneRevealed) gameState.secretZoneRevealed = true;
+
+  if (saved.portalActive) {
+    gameState.portalActive = true;
+    portalGroup.userData.active = true;
+    portalDisc.material.opacity = 0.25;
+    portalParticles.material.opacity = 0.6;
+  }
+
+  if (saved.collectedCores >= 1) {
+    gameState.collectedCores = saved.collectedCores;
+    spawnHubCoreObject();
+  }
+
+  // constellation connections already solved before
+  (saved.constellationProgress || []).forEach((key) => {
+    if (connectedPairs.has(key)) return;
+    const [a, b] = key.split('-').map(Number);
+    const pointA = constellationPoints[a];
+    const pointB = constellationPoints[b];
+    if (!pointA || !pointB) return;
+    connectedPairs.add(key);
+    pointA.userData.connected = true;
+    pointB.userData.connected = true;
+    constellationLines.add(makeConnectionLine(pointA, pointB));
+  });
+  gameState.constellationProgress = Array.from(connectedPairs);
+  if (connectedPairs.size >= CONFIG.constellation.solution.length && !coreRewardGroup) {
+    coreMesh.visible = false;
+    coreGlow.visible = false;
+    spawnCoreReward();
+    coreRewardGroup.scale.setScalar(1);
+    if (saved.collectedCores >= 1) {
+      coreRewardGroup.visible = false;
+      coreRewardGroup.userData.collected = true;
+    } else {
+      revealReturnPortal();
+    }
+  }
+
+  updateFragmentUI();
+  // V4 restoration
+  if (saved.gravityUnlocked) {
+    gameState.gravityUnlocked = true;
+    orbitalObjects.gravity.visible = true;
+  }
+  gameState.secretsFound = saved.secretsFound || [];
+  if (saved.collectedGravitySeeds >= 1) {
+    gameState.collectedGravitySeeds = saved.collectedGravitySeeds;
+  }
+  (saved.gravityLockedRings || []).forEach((ringIndex) => {
+    const ring = gravityOrbitRings[ringIndex];
+    const nucleus = gravityNuclei.find((n) => !n.userData.locked);
+    if (!ring || !nucleus || ring.userData.occupied) return;
+    lockNucleusIntoOrbit(nucleus, ring);
+  });
+  if (
+    saved.gravityLockedRings &&
+    saved.gravityLockedRings.length >= gravityOrbitRings.length &&
+    saved.collectedGravitySeeds >= 1
+  ) {
+    // the puzzle was already solved and its reward already collected —
+    // nothing left to spawn in that zone
+  } else if (
+    saved.gravityLockedRings &&
+    saved.gravityLockedRings.length >= gravityOrbitRings.length
+  ) {
+    spawnGravitySeed();
+    gravitySeedGroup.scale.setScalar(1);
+    gravityReturnPortalGroup.visible = true;
+  }
+
+  // always resume in the hub — simplest and safest starting point
+  enterZone('hub');
+}
+
+/* ================================================================
+   INTERACTION STATE
+================================================================ */
+const pointer = { x: 0, y: 0, normX: 0, normY: 0 };
+const drag = {
+  active: false,
+  lastX: 0,
+  lastY: 0,
+  velX: 0,
+  velY: 0,
+};
+let hasInteracted = false;
+
+// V2 — a single pointer can only be doing one of these at a time
+let interactionMode = null; // null | 'rotate' | 'charge' | 'drag-shard'
+const charge = { target: null, startTime: 0, startX: 0, startY: 0 };
+
+const cameraRig = {
+  distance: CONFIG.camera.startDistance,
+  targetDistance: CONFIG.camera.startDistance,
+  parallaxX: 0,
+  parallaxY: 0,
+};
+
+const raycaster = new THREE.Raycaster();
+const raycastPoint = new THREE.Vector2();
+let hoveredNode = null;
+let hoveredCrystal = false;
+// V2 — hover targets for the new system objects
+let hoveredOrbital = null;   // fragment / secondary / mystery group
+let hoveredShard = false;
+let hoveredPortal = false;
+let hoveredMicroSymbol = false;
+
+function getRotationTarget() {
+  if (activeZone === 'constellation') return constellationGroup;
+  if (activeZone === 'gravity') return gravityGroup;
+  return worldGroup;
+}
+
+/* ================================================================
+   POINTER / DRAG (mouse + touch unified via Pointer Events)
+============================================================== */
+function setupPointerEvents() {
+  const canvas = document.getElementById('scene');
+
+  canvas.addEventListener('pointerdown', (e) => {
+    updatePointerPosition(e.clientX, e.clientY);
+    updateHover();
+    canvas.setPointerCapture(e.pointerId);
+
+    if (activeZone === 'constellation' && hoveredConstellationPoint) {
+      interactionMode = 'connect';
+      connecting = { fromPoint: hoveredConstellationPoint };
+      const p = hoveredConstellationPoint.position.clone();
+      tempConnectLine.geometry.setFromPoints([p, p.clone()]);
+      tempConnectLine.material.opacity = 0.7;
+      tempConnectLine.visible = true;
+      document.getElementById('cursor-ring').classList.add('connecting');
+    } else if (activeZone === 'gravity' && hoveredNucleus) {
+      interactionMode = 'gravity-drag';
+      draggedNucleus = hoveredNucleus;
+      const worldPos = new THREE.Vector3();
+      draggedNucleus.getWorldPosition(worldPos);
+      updateCursorFieldWorld(e.clientX, e.clientY, camera.position.distanceTo(worldPos));
+      secretDrag.shiftAtStart = shiftHeld;
+    } else if (activeZone === 'hub' && hoveredShard) {
+      interactionMode = 'drag-shard';
+      shardMesh.userData.carried = true;
+    } else if (activeZone === 'hub' && hoveredOrbital && hoveredOrbital.userData.requiresHold) {
+      interactionMode = 'charge';
+      charge.target = hoveredOrbital;
+      charge.startTime = clock.getElapsedTime();
+      charge.startX = e.clientX;
+      charge.startY = e.clientY;
+    } else {
+      interactionMode = 'rotate';
+      drag.active = true;
+      drag.lastX = e.clientX;
+      drag.lastY = e.clientY;
+    }
+    setCursorPressed(true);
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    updatePointerPosition(e.clientX, e.clientY);
+
+    if (interactionMode === 'rotate' && drag.active) {
+      const target = getRotationTarget();
+      const dx = e.clientX - drag.lastX;
+      const dy = e.clientY - drag.lastY;
+      drag.velX = dx * CONFIG.rotation.dragSensitivity;
+      drag.velY = dy * CONFIG.rotation.dragSensitivity;
+      target.rotation.y += drag.velX;
+      target.rotation.x = THREE.MathUtils.clamp(
+        target.rotation.x + drag.velY,
+        -1.1,
+        1.1
+      );
+      drag.lastX = e.clientX;
+      drag.lastY = e.clientY;
+      registerFirstInteraction();
+    } else if (interactionMode === 'drag-shard') {
+      dragShardTo(e.clientX, e.clientY);
+    } else if (interactionMode === 'charge') {
+      const dx = e.clientX - charge.startX;
+      const dy = e.clientY - charge.startY;
+      if (Math.sqrt(dx * dx + dy * dy) > CONFIG.charge.cancelDrift) {
+        cancelCharge();
+      }
+    } else if (interactionMode === 'connect') {
+      updateConnectDrag(e.clientX, e.clientY);
+      registerFirstInteractionConstellation();
+    } else if (interactionMode === 'gravity-drag' && draggedNucleus) {
+      const worldPos = new THREE.Vector3();
+      draggedNucleus.getWorldPosition(worldPos);
+      updateCursorFieldWorld(e.clientX, e.clientY, camera.position.distanceTo(worldPos));
+      updateGravitySecretWatch();
+      registerFirstInteraction();
+    }
+  });
+
+  window.addEventListener('pointerup', (e) => {
+    if (interactionMode === 'drag-shard') {
+      releaseShard();
+    } else if (interactionMode === 'charge') {
+      resolveCharge();
+    } else if (interactionMode === 'connect') {
+      resolveConnectDrag(e.clientX, e.clientY);
+    } else if (interactionMode === 'gravity-drag') {
+      checkSecretRelease();
+      draggedNucleus = null;
+    }
+    document.getElementById('cursor-ring').classList.remove('connecting');
+    interactionMode = null;
+    drag.active = false;
+    setCursorPressed(false);
+  });
+
+  canvas.addEventListener('pointerleave', () => {
+    if (interactionMode === 'charge') cancelCharge();
+    if (interactionMode === 'connect') rejectConnection();
+    if (interactionMode === 'gravity-drag') draggedNucleus = null;
+    drag.active = false;
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Shift') {
+      shiftHeld = true;
+      document.getElementById('cursor-ring').classList.add('repulse');
+    }
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.key === 'Shift') {
+      shiftHeld = false;
+      document.getElementById('cursor-ring').classList.remove('repulse');
+    }
+  });
+
+  // click (as opposed to drag) triggers node/crystal/fragment/portal activation
+  canvas.addEventListener('click', (e) => {
+    handleClick(e.clientX, e.clientY);
+  });
+
+  // desktop zoom
+  canvas.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      cameraRig.targetDistance = THREE.MathUtils.clamp(
+        cameraRig.targetDistance + e.deltaY * CONFIG.camera.zoomStep * cameraRig.targetDistance,
+        CONFIG.camera.minDistance,
+        CONFIG.camera.maxDistance
+      );
+      registerFirstInteraction();
+    },
+    { passive: false }
+  );
+
+  // basic pinch-to-zoom for touch
+  let pinchStartDist = null;
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) {
+      pinchStartDist = touchDistance(e.touches);
+    }
+  }, { passive: true });
+
+  canvas.addEventListener('touchmove', (e) => {
+    if (e.touches.length === 2 && pinchStartDist) {
+      const dist = touchDistance(e.touches);
+      const delta = pinchStartDist - dist;
+      cameraRig.targetDistance = THREE.MathUtils.clamp(
+        cameraRig.targetDistance + delta * 0.03,
+        CONFIG.camera.minDistance,
+        CONFIG.camera.maxDistance
+      );
+      pinchStartDist = dist;
+      registerFirstInteraction();
+    }
+  }, { passive: true });
+
+  window.addEventListener('resize', onResize);
+}
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function updatePointerPosition(clientX, clientY) {
+  pointer.x = clientX;
+  pointer.y = clientY;
+  pointer.normX = (clientX / window.innerWidth) * 2 - 1;
+  pointer.normY = -(clientY / window.innerHeight) * 2 + 1;
+
+  const dot = document.getElementById('cursor-dot');
+  const ring = document.getElementById('cursor-ring');
+  if (dot && ring) {
+    dot.style.transform = `translate(${clientX}px, ${clientY}px) translate(-50%, -50%)`;
+    ring.style.transform = `translate(${clientX}px, ${clientY}px) translate(-50%, -50%)`;
+  }
+}
+
+function setCursorPressed(pressed) {
+  document.getElementById('cursor-ring').classList.toggle('press', pressed);
+}
+
+/* ----------------------------------------------------------
+   V2 — shard drag & drop (section 15)
+---------------------------------------------------------- */
+function dragShardTo(clientX, clientY) {
+  raycastPoint.set(
+    (clientX / window.innerWidth) * 2 - 1,
+    -(clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(raycastPoint, camera);
+  // project onto a plane at the shard's current depth from the camera
+  const depth = camera.position.distanceTo(shardMesh.position);
+  const worldPos = raycaster.ray.origin.clone().add(
+    raycaster.ray.direction.clone().multiplyScalar(depth)
+  );
+  shardMesh.position.copy(worldPos);
+  registerFirstInteraction();
+}
+
+function releaseShard() {
+  shardMesh.userData.carried = false;
+  const portalWorldPos = new THREE.Vector3();
+  portalGroup.getWorldPosition(portalWorldPos);
+  const dropDistance = shardMesh.position.distanceTo(portalWorldPos);
+
+  if (dropDistance < CONFIG.portal.radius * 1.3) {
+    settleShardAtPortal();
+  } else {
+    returnShardHome();
+  }
+}
+
+/* ----------------------------------------------------------
+   V2 — hold-to-charge (section 14)
+---------------------------------------------------------- */
+function cancelCharge() {
+  if (charge.target) {
+    charge.target.userData.chargeProgress = 0;
+  }
+  charge.target = null;
+  interactionMode = null;
+}
+
+function resolveCharge() {
+  if (!charge.target) return;
+  const held = clock.getElapsedTime() - charge.startTime;
+  if (held >= CONFIG.charge.holdDuration) {
+    activateMysteryLight(charge.target);
+  }
+  charge.target.userData.chargeProgress = 0;
+  charge.target = null;
+}
+
+function activateMysteryLight(obj) {
+  if (obj.userData.activated) return;
+  obj.userData.activated = true;
+  obj.children[0].material.emissiveIntensity = 3;
+  obj.userData.halo.material.opacity = 0.9;
+  gameState.energy += 2;
+  gameState.secretZoneRevealed = true;
+  spawnCursorRipple();
+  showCenterMessage('SIGNAL ACQUIRED');
+  updateWorldState();
+}
+
+function registerFirstInteraction() {
+  if (hasInteracted) return;
+  hasInteracted = true;
+  if (activeZone === 'hub') document.getElementById('drag-hint').classList.add('hidden');
+}
+
+function registerFirstInteractionConstellation() {
+  if (hasInteractedConstellation) return;
+  hasInteractedConstellation = true;
+  if (activeZone === 'constellation') document.getElementById('drag-hint').classList.add('hidden');
+}
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+/* ================================================================
+   RAYCAST HOVER — dispatches to the active zone's own hover logic
+============================================================ */
+function updateHover() {
+  if (zoneTransition) return;
+  if (activeZone === 'constellation') {
+    updateConstellationHover();
+  } else if (activeZone === 'gravity') {
+    updateGravityHover();
+  } else {
+    updateHubHover();
+  }
+}
+
+function updateHubHover() {
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+
+  const targets = nodeMeshes.slice();
+  if (crystalGroup && crystalGroup.userData.spawnTime !== null && !crystalGroup.userData.collected) {
+    targets.push(crystalGroup.children[0]);
+  }
+  // V2 targets
+  Object.values(orbitalObjects).forEach((obj) => {
+    if (!obj.userData.collected && obj.visible) targets.push(obj.children[0]);
+  });
+  if (shardMesh && shardMesh.visible && !shardMesh.userData.carried) {
+    targets.push(shardMesh);
+  }
+  if (portalGroup && portalGroup.userData.active) {
+    targets.push(portalDisc);
+  }
+  if (microSymbol && microSymbol.visible) {
+    targets.push(microSymbol);
+  }
+
+  const intersects = raycaster.intersectObjects(targets, false);
+  const ring = document.getElementById('cursor-ring');
+
+  hoveredNode = null;
+  hoveredCrystal = false;
+  hoveredOrbital = null;
+  hoveredShard = false;
+  hoveredPortal = false;
+  hoveredMicroSymbol = false;
+
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    ring.classList.add('hover');
+
+    if (obj.parent === crystalGroup) {
+      hoveredCrystal = true;
+    } else if (obj === shardMesh) {
+      hoveredShard = true;
+    } else if (obj === portalDisc) {
+      hoveredPortal = true;
+    } else if (obj === microSymbol) {
+      hoveredMicroSymbol = true;
+    } else if (obj.parent && obj.parent.userData && obj.parent.userData.name) {
+      hoveredOrbital = obj.parent;
+    } else {
+      hoveredNode = obj;
+    }
+  } else {
+    ring.classList.remove('hover');
+  }
+}
+
+/* V3 — hover for the constellation zone: points, the core reward, the return portal */
+function updateConstellationHover() {
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+
+  const targets = constellationPoints.slice();
+  if (coreRewardGroup && coreRewardGroup.visible && !coreRewardGroup.userData.collected) {
+    targets.push(coreRewardGroup.children[0]);
+  }
+  if (returnPortalGroup && returnPortalGroup.visible) {
+    targets.push(returnPortalDisc);
+  }
+
+  const intersects = raycaster.intersectObjects(targets, false);
+  const ring = document.getElementById('cursor-ring');
+
+  hoveredConstellationPoint = null;
+  hoveredCoreReward = false;
+  hoveredReturnPortal = false;
+
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    ring.classList.add('hover');
+    if (coreRewardGroup && obj.parent === coreRewardGroup) {
+      hoveredCoreReward = true;
+    } else if (obj === returnPortalDisc) {
+      hoveredReturnPortal = true;
+    } else {
+      hoveredConstellationPoint = obj;
+    }
+  } else {
+    ring.classList.remove('hover');
+  }
+}
+
+/* V4 — hover for the gravity zone: nuclei, the seed, the return portal */
+function updateGravityHover() {
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+
+  const targets = gravityNuclei.slice();
+  if (gravitySeedGroup && gravitySeedGroup.visible && !gravitySeedGroup.userData.collected) {
+    targets.push(gravitySeedGroup.children[0]);
+  }
+  if (gravityReturnPortalGroup && gravityReturnPortalGroup.visible) {
+    targets.push(gravityReturnPortalDisc);
+  }
+
+  const intersects = raycaster.intersectObjects(targets, false);
+  const ring = document.getElementById('cursor-ring');
+
+  hoveredNucleus = null;
+  hoveredGravitySeed = false;
+  hoveredGravityReturnPortal = false;
+
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    ring.classList.add('hover');
+    if (gravitySeedGroup && obj.parent === gravitySeedGroup) {
+      hoveredGravitySeed = true;
+    } else if (obj === gravityReturnPortalDisc) {
+      hoveredGravityReturnPortal = true;
+    } else {
+      hoveredNucleus = obj;
+    }
+  } else {
+    ring.classList.remove('hover');
+  }
+}
+
+/* ----------------------------------------------------------
+   V3 — drag-to-connect (sections 8, 9, 10)
+---------------------------------------------------------- */
+function updateConnectDrag(clientX, clientY) {
+  if (!connecting) return;
+  raycastPoint.set(
+    (clientX / window.innerWidth) * 2 - 1,
+    -(clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(raycastPoint, camera);
+
+  const fromWorld = new THREE.Vector3();
+  connecting.fromPoint.getWorldPosition(fromWorld);
+  const depth = camera.position.distanceTo(fromWorld);
+  const worldPos = raycaster.ray.origin.clone().add(
+    raycaster.ray.direction.clone().multiplyScalar(depth)
+  );
+  const localPos = constellationGroup.worldToLocal(worldPos.clone());
+
+  tempConnectLine.geometry.setFromPoints([
+    connecting.fromPoint.position.clone(),
+    localPos,
+  ]);
+
+  // highlight the nearest candidate point within snapping range
+  let nearest = null;
+  let nearestDist = CONFIG.constellation.connectSnapRadius;
+  constellationPoints.forEach((pt) => {
+    if (pt === connecting.fromPoint) return;
+    const d = pt.position.distanceTo(localPos);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = pt;
+    }
+  });
+  hoveredConstellationPoint = nearest || connecting.fromPoint;
+}
+
+function resolveConnectDrag() {
+  if (!connecting) return;
+  const fromPoint = connecting.fromPoint;
+  const toPoint = hoveredConstellationPoint !== fromPoint ? hoveredConstellationPoint : null;
+  connecting = null;
+
+  if (toPoint) {
+    const key = [fromPoint.userData.id, toPoint.userData.id].sort((a, b) => a - b).join('-');
+    const isSolution = CONFIG.constellation.solution.some(
+      ([a, b]) => [a, b].sort((x, y) => x - y).join('-') === key
+    );
+    if (isSolution && !connectedPairs.has(key)) {
+      confirmConnection(fromPoint, toPoint);
+      tempConnectLine.visible = false;
+      return;
+    }
+  }
+  rejectConnection();
+}
+
+/* ================================================================
+   CLICK HANDLING — zone-aware dispatch
+============================================================ */
+function handleClick(clientX, clientY) {
+  // ignore clicks that were actually part of a drag gesture
+  if (Math.abs(drag.velX) > 0.01 || Math.abs(drag.velY) > 0.01) return;
+  if (zoneTransition) return;
+
+  updatePointerPosition(clientX, clientY);
+  updateHover();
+
+  if (activeZone === 'constellation') {
+    if (hoveredCoreReward) {
+      collectCoreReward();
+    } else if (hoveredReturnPortal) {
+      triggerZoneTransition('hub', returnPortalGroup, returnPortalDisc.material);
+    }
+    registerFirstInteractionConstellation();
+    return;
+  }
+
+  if (activeZone === 'gravity') {
+    if (hoveredGravitySeed) {
+      collectGravitySeed();
+    } else if (hoveredGravityReturnPortal) {
+      triggerZoneTransition('hub', gravityReturnPortalGroup, gravityReturnPortalDisc.material);
+    }
+    return;
+  }
+
+  if (hoveredNode && !hoveredNode.userData.discovered) {
+    activateNode(hoveredNode);
+  } else if (hoveredCrystal) {
+    collectCrystal();
+  } else if (hoveredOrbital && hoveredOrbital.userData.name === 'fragment') {
+    startFragmentAbsorption(hoveredOrbital);
+  } else if (hoveredOrbital && hoveredOrbital.userData.name === 'secondary') {
+    // secondary sphere: no state change yet, just a quiet acknowledgement
+    hoveredOrbital.userData.halo.material.opacity = 0.7;
+  } else if (hoveredOrbital && hoveredOrbital.userData.name === 'gravity') {
+    triggerZoneTransition('gravity', orbitalObjects.gravity, orbitalObjects.gravity.children[1].material);
+  } else if (hoveredPortal) {
+    triggerPortalTransition();
+  } else if (hoveredMicroSymbol) {
+    activateMicroSymbol();
+  }
+  registerFirstInteraction();
+}
+
+function activateNode(node) {
+  node.userData.discovered = true;
+  node.material.color.setHex(CONFIG.nodes.activeColor);
+  node.material.opacity = 1;
+  node.userData.halo.material.opacity = 0.8;
+  node.userData.pulseStart = clock.getElapsedTime();
+
+  gameState.discoveredNodes.push(node.userData.id);
+  gameState.discoveries += 1;
+  gameState.energy += 1;
+
+  spawnSurfaceRipple(node.position.clone());
+  spawnCursorRipple();
+
+  const el = document.getElementById('progress-index');
+  el.textContent = `${String(gameState.discoveries).padStart(2, '0')} / DISCOVERY`;
+
+  if (gameState.discoveries >= CONFIG.nodes.count && !gameState.unlocked) {
+    triggerUnlock();
+  }
+  updateWorldState();
+}
+
+/* expanding ring on the planet surface where a node was activated */
+const activeRipples = [];
+function spawnSurfaceRipple(position) {
+  const geo = new THREE.RingGeometry(0.05, 0.09, 32);
+  const mat = new THREE.MeshBasicMaterial({
+    color: CONFIG.nodes.activeColor,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(geo, mat);
+  ring.position.copy(position);
+  ring.lookAt(position.clone().multiplyScalar(2)); // face outward from planet center
+  ring.userData.birth = clock.getElapsedTime();
+  planetGroup.add(ring);
+  activeRipples.push(ring);
+}
+
+function updateSurfaceRipples(t) {
+  for (let i = activeRipples.length - 1; i >= 0; i--) {
+    const ring = activeRipples[i];
+    const age = t - ring.userData.birth;
+    const duration = 1.1;
+    if (age > duration) {
+      planetGroup.remove(ring);
+      ring.geometry.dispose();
+      ring.material.dispose();
+      activeRipples.splice(i, 1);
+      continue;
+    }
+    const p = age / duration;
+    const scale = 1 + p * 14;
+    ring.scale.set(scale, scale, scale);
+    ring.material.opacity = 0.8 * (1 - p);
+  }
+}
+
+/* small screen-space ripple at cursor, purely cosmetic feedback */
+function spawnCursorRipple() {
+  const el = document.createElement('div');
+  el.className = 'cursor-ripple';
+  el.style.left = `${pointer.x}px`;
+  el.style.top = `${pointer.y}px`;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 750);
+}
+
+/* ================================================================
+   UNLOCK SEQUENCE — triggered once all nodes are discovered
+============================================================ */
+let unlockTime = null;
+
+function triggerUnlock() {
+  gameState.unlocked = true;
+  unlockTime = clock.getElapsedTime();
+
+  showCenterMessage('DISCOVERY\u00A0COMPLETE', 4200);
+
+  // reveal the crystal with a soft grow-in
+  crystalGroup.userData.spawnTime = unlockTime;
+}
+
+function updateUnlockAnimation(t) {
+  if (!gameState.unlocked) return;
+  const age = t - unlockTime;
+
+  // rings accelerate briefly, then settle back to their base speed
+  const boost = Math.max(0, 1 - age / 3);
+  ringMeshes.forEach((ring) => {
+    ring.rotation.z += ring.userData.speed * (1 + boost * 6);
+    ring.material.opacity = ring.userData.baseOpacity * (1 + boost * 1.5);
+  });
+
+  // planet pulses once
+  const pulse = 1 + Math.max(0, Math.sin(age * 3)) * boost * 0.06;
+  planetGroup.scale.set(pulse, pulse, pulse);
+
+  // crystal grows in
+  if (crystalGroup.userData.spawnTime !== null && !crystalGroup.userData.collected) {
+    const growAge = t - crystalGroup.userData.spawnTime;
+    const s = THREE.MathUtils.clamp(growAge / 1.6, 0, 1);
+    const eased = 1 - Math.pow(1 - s, 3);
+    crystalGroup.scale.set(eased, eased, eased);
+  }
+}
+
+function collectCrystal() {
+  if (crystalGroup.userData.collected) return;
+  crystalGroup.userData.collected = true;
+  gameState.crystalCollected = true;
+  spawnCursorRipple();
+  saveGame();
+
+  const startTime = clock.getElapsedTime();
+  const startPos = crystalGroup.position.clone();
+
+  function collectAnim() {
+    const t = clock.getElapsedTime() - startTime;
+    const duration = 0.6;
+    const p = Math.min(t / duration, 1);
+    const eased = p * p;
+    crystalGroup.position.lerpVectors(startPos, camera.position, eased * 0.4);
+    const s = Math.max(0, 1 - eased);
+    crystalGroup.scale.set(s, s, s);
+    if (p < 1) {
+      requestAnimationFrame(collectAnim);
+    } else {
+      crystalGroup.visible = false;
+    }
+  }
+  collectAnim();
+}
+
+/* ================================================================
+   PER-FRAME UPDATE
+============================================================ */
+function update(t, delta) {
+  // idle drift + inertia decay after drag release
+  if (!drag.active) {
+    drag.velX *= CONFIG.rotation.damping;
+    drag.velY *= CONFIG.rotation.damping;
+    if (activeZone === 'hub') {
+      worldGroup.rotation.y += drag.velX + CONFIG.rotation.idleSpeed;
+      worldGroup.rotation.x = THREE.MathUtils.clamp(
+        worldGroup.rotation.x + drag.velY,
+        -1.1,
+        1.1
+      );
+    } else if (activeZone === 'constellation') {
+      constellationGroup.rotation.y += drag.velX;
+      constellationGroup.rotation.x = THREE.MathUtils.clamp(
+        constellationGroup.rotation.x + drag.velY,
+        -1.1,
+        1.1
+      );
+    } else if (activeZone === 'gravity') {
+      gravityGroup.rotation.y += drag.velX;
+      gravityGroup.rotation.x = THREE.MathUtils.clamp(
+        gravityGroup.rotation.x + drag.velY,
+        -1.1,
+        1.1
+      );
+    }
+  }
+
+  // rings: slow independent rotation (skipped here during unlock boost, handled above)
+  if (!gameState.unlocked) {
+    ringMeshes.forEach((ring) => {
+      ring.rotation.z += ring.userData.speed;
+    });
+  } else {
+    updateUnlockAnimation(t);
+  }
+
+  // gentle breathing scale on the glow shell
+  const breathe = 1 + Math.sin(t * 0.5) * 0.015;
+  glowMesh.scale.set(breathe, breathe, breathe);
+
+  // node halo pulse for discovered nodes
+  nodeMeshes.forEach((node) => {
+    if (node.userData.discovered) {
+      const s = 1 + Math.sin(t * 2 + node.userData.id) * 0.15;
+      node.scale.set(s, s, s);
+    } else if (node === hoveredNode) {
+      node.scale.set(1.6, 1.6, 1.6);
+      node.material.opacity = 0.75;
+    } else {
+      node.scale.set(1, 1, 1);
+      node.material.opacity = 0.35;
+    }
+  });
+
+  updateSurfaceRipples(t);
+
+  // crystal float + rotation
+  if (crystalGroup && crystalGroup.userData.spawnTime !== null) {
+    crystalGroup.rotation.y += 0.01;
+    crystalGroup.position.y =
+      CONFIG.planet.radius * 0.6 + Math.sin(t * 0.8) * 0.25;
+    if (hoveredCrystal) {
+      const s = crystalGroup.scale.x;
+      crystalGroup.scale.set(s * 1.002, s * 1.002, s * 1.002);
+    }
+  }
+
+  // camera zoom (lerped for a cinematic feel) — suspended during zone transitions,
+  // which drive the camera themselves
+  if (!zoneTransition) {
+    cameraRig.distance = THREE.MathUtils.lerp(
+      cameraRig.distance,
+      cameraRig.targetDistance,
+      CONFIG.camera.zoomLerp
+    );
+
+    // mouse parallax on the camera position
+    cameraRig.parallaxX = THREE.MathUtils.lerp(
+      cameraRig.parallaxX,
+      pointer.normX * CONFIG.parallax.strength,
+      CONFIG.parallax.lerp
+    );
+    cameraRig.parallaxY = THREE.MathUtils.lerp(
+      cameraRig.parallaxY,
+      pointer.normY * CONFIG.parallax.strength,
+      CONFIG.parallax.lerp
+    );
+
+    camera.position.x = cameraRig.parallaxX;
+    camera.position.y = cameraRig.parallaxY;
+    camera.position.z = cameraRig.distance;
+    camera.lookAt(0, 0, 0);
+  }
+
+  // near particles: subtle repel from cursor world position + settle back
+  updateNearParticles(t);
+
+  // slow independent rotation for the distant starfield (depth cue)
+  farParticles.rotation.y += 0.0002;
+  farParticles.rotation.x += 0.00005;
+
+  // V2 systems
+  updateOrbitalObjects(t);
+  updatePortal(t);
+  updateShard(t);
+  updateMicroZoom();
+  updateSecretZone(delta);
+  updateFragmentAbsorption(t);
+  updateWowEvent(t);
+  updateSignalPulses(t);
+  updateChargeVisual(t);
+
+  // V3 systems
+  updateConstellationZone(t);
+  updateZoneTransition(t);
+
+  // V4 systems
+  updateGravityZone(t, delta);
+
+  updateHover();
+}
+
+/* ----------------------------------------------------------
+   V2 — "signal" mechanic (section 11): a very subtle halo pulse
+   when the cursor passes near a hidden object without hovering it
+---------------------------------------------------------- */
+function updateSignalPulses(t) {
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+  const mouseWorld = raycaster.ray.origin
+    .clone()
+    .add(raycaster.ray.direction.clone().multiplyScalar(cameraRig.distance));
+
+  const signalRadius = 2.2;
+  Object.values(orbitalObjects).forEach((obj) => {
+    if (obj.userData.collected) return;
+    const worldPos = new THREE.Vector3();
+    obj.getWorldPosition(worldPos);
+    const dist = worldPos.distanceTo(mouseWorld);
+    if (dist < signalRadius && obj !== hoveredOrbital) {
+      const proximity = 1 - dist / signalRadius;
+      obj.userData.halo.material.opacity = 0.3 + proximity * 0.25;
+    } else if (obj !== hoveredOrbital) {
+      obj.userData.halo.material.opacity = THREE.MathUtils.lerp(
+        obj.userData.halo.material.opacity,
+        0.3,
+        0.05
+      );
+    }
+  });
+}
+
+/* ----------------------------------------------------------
+   V2 — cursor charge-ring visual (section 19)
+---------------------------------------------------------- */
+function updateChargeVisual(t) {
+  const ring = document.getElementById('cursor-ring');
+  if (interactionMode === 'charge' && charge.target) {
+    const held = t - charge.startTime;
+    const p = Math.min(held / CONFIG.charge.holdDuration, 1);
+    ring.classList.add('charging');
+    ring.style.setProperty('--charge', p.toFixed(3));
+  } else {
+    ring.classList.remove('charging');
+    ring.style.removeProperty('--charge');
+  }
+}
+
+function updateNearParticles(t) {
+  const posAttr = nearParticles.geometry.attributes.position;
+  const base = nearParticles.geometry.userData.base;
+  const count = posAttr.count;
+
+  // project mouse into world space roughly at the particle field depth
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+  const mouseWorld = raycaster.ray.origin
+    .clone()
+    .add(raycaster.ray.direction.clone().multiplyScalar(cameraRig.distance));
+
+  for (let i = 0; i < count; i++) {
+    const ix = i * 3;
+    const bx = base[ix], by = base[ix + 1], bz = base[ix + 2];
+
+    // gentle ambient bob
+    const wobble = Math.sin(t * 0.6 + i) * 0.05;
+
+    let x = bx + wobble;
+    let y = by + Math.cos(t * 0.5 + i) * 0.05;
+    let z = bz;
+
+    const dx = x - mouseWorld.x;
+    const dy = y - mouseWorld.y;
+    const dz = z - mouseWorld.z;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    const influenceRadius = 3.2;
+
+    if (distSq < influenceRadius * influenceRadius) {
+      const dist = Math.sqrt(distSq) || 0.001;
+      const push = (1 - dist / influenceRadius) * 0.6;
+      x += (dx / dist) * push;
+      y += (dy / dist) * push;
+      z += (dz / dist) * push;
+    }
+
+    posAttr.array[ix] = x;
+    posAttr.array[ix + 1] = y;
+    posAttr.array[ix + 2] = z;
+  }
+  posAttr.needsUpdate = true;
+}
+
+/* ================================================================
+   ANIMATE LOOP
+============================================================ */
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const delta = clock.getDelta();
+  update(t, delta);
+  renderer.render(scene, camera);
+}
+
+/* ================================================================
+   BOOT
+============================================================ */
+function init() {
+  clock = new THREE.Clock();
+  initRenderer();
+  initScene();
+  initCamera();
+  initLights();
+  initWorldGroup();
+  createPlanet();
+  createRings();
+  createNodes();
+  createMicroStructures();
+  createFarParticles();
+  createNearParticles();
+  createCrystal();
+  // V2 — system objects, portal, shard, secret zone
+  initOrbitalGroup();
+  createSystemObjects();
+  createGravityGate();
+  createPortal();
+  createShard();
+  createSecretZone();
+  // V3 — the constellation zone (built eagerly so saved progress can be
+  // restored immediately, even though it stays hidden until entered)
+  createConstellationZone();
+  // V4 — the gravity zone (also built eagerly, same reasoning)
+  createGravityZone();
+  setupPointerEvents();
+  applyLoadedState(loadGame());
+  animate();
+}
+
+init();
+
+</script>
 </body>
 </html>
