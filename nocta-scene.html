@@ -8702,6 +8702,9 @@ ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
+// Objets sur lesquels le chat peut marcher/grimper (sol + bâtiment une fois chargé)
+const collidables = [ground];
+
 const gridHelper = new THREE.GridHelper(30, 30, 0x2a3466, 0x141a33);
 gridHelper.position.y = 0.01;
 scene.add(gridHelper);
@@ -8739,7 +8742,7 @@ const CAT_TURN_SPEED = 2.6;   // radians/seconde
 // Point d'apparition estimé (zone entourée à l'avant-gauche du bâtiment).
 // À ajuster toi-même si besoin en regardant la scène en direct — je n'ai
 // pas de moyen de vérifier les coordonnées exactes du modèle depuis une capture.
-const CAT_SPAWN = { x: -2.4, z: 3.6 };
+const CAT_SPAWN = { x: -2.4, y: 0.15, z: 3.6 };
 
 const keys = { forward: false, backward: false, left: false, right: false };
 window.addEventListener('keydown', (e) => {
@@ -8779,7 +8782,7 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
 
   catGroup = new THREE.Group();
   catGroup.add(catRoot);
-  catGroup.position.set(CAT_SPAWN.x, 0, CAT_SPAWN.z);
+  catGroup.position.set(CAT_SPAWN.x, CAT_SPAWN.y, CAT_SPAWN.z);
   scene.add(catGroup);
 
   if (gltf.animations && gltf.animations.length) {
@@ -8794,6 +8797,16 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
   }
 
   let wasMoving = false;
+  const groundRay = new THREE.Raycaster();
+  groundRay.far = 40;
+  const RAY_HEIGHT = 20;   // on part d'en haut pour être sûr de passer au-dessus de tout
+  const MAX_STEP = 0.45;   // dénivelé max franchissable en une fois (escalier = ok, mur = bloqué)
+  function groundHeightAt(x, z) {
+    groundRay.set(new THREE.Vector3(x, RAY_HEIGHT, z), new THREE.Vector3(0, -1, 0));
+    const hits = groundRay.intersectObjects(collidables, true);
+    return hits.length ? hits[0].point.y : null;
+  }
+
   animatables.push({
     update(t, delta) {
       const turning = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
@@ -8802,7 +8815,21 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
       if (turning) catGroup.rotation.y += turning * CAT_TURN_SPEED * delta;
       if (moving) {
         const dir = new THREE.Vector3(Math.sin(catGroup.rotation.y), 0, Math.cos(catGroup.rotation.y));
-        catGroup.position.addScaledVector(dir, moving * CAT_MOVE_SPEED * delta);
+        const step = moving * CAT_MOVE_SPEED * delta;
+        const candX = catGroup.position.x + dir.x * step;
+        const candZ = catGroup.position.z + dir.z * step;
+        const surfaceY = groundHeightAt(candX, candZ);
+        // On n'avance que si une surface existe et que la marche à franchir
+        // n'est pas trop haute (sinon ça fait office de mur infranchissable)
+        if (surfaceY !== null && Math.abs(surfaceY - catGroup.position.y) <= MAX_STEP) {
+          catGroup.position.x = candX;
+          catGroup.position.z = candZ;
+          catGroup.position.y = surfaceY;
+        }
+      } else {
+        // À l'arrêt, on recolle quand même le chat au sol (utile juste après le chargement)
+        const surfaceY = groundHeightAt(catGroup.position.x, catGroup.position.z);
+        if (surfaceY !== null) catGroup.position.y = surfaceY;
       }
 
       // Bascule idle <-> marche selon le déplacement
@@ -8868,6 +8895,7 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
   const min2 = box2.min;
   building.position.set(-center2.x, -min2.y, -center2.z);
   scene.add(building);
+  collidables.push(building);
 
   if (buildingEmissiveMats.length) {
     animatables.push({
