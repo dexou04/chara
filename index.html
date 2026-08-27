@@ -148,6 +148,18 @@ html, body {
   opacity: 0;
   background: radial-gradient(ellipse at center, #eaf6ff 0%, #9fd8ff 55%, #5ee7ff 100%);
 }
+.flash-overlay.warm {
+  background: radial-gradient(ellipse at center, #fff3e0 0%, #ffcf9a 55%, #ff8a3d 100%);
+}
+/* V5 — VOID zone flash: quieter, colder, almost swallowed by black (section 5) */
+.flash-overlay.void {
+  background: radial-gradient(ellipse at center, #f0eaff 0%, #7a5fb0 45%, #05020a 100%);
+}
+/* V6 — MORPH zone flash: warm-cold matter blend, per section 4
+   ("le joueur traverse une matière" — not a plain fade) */
+.flash-overlay.morph {
+  background: radial-gradient(ellipse at center, #fff0fb 0%, #f2a6ff 30%, #d946ef 55%, #5ee7ff 80%, #1a0a2a 100%);
+}
 
 /* ============================================================
    CANVAS (three.js render target)
@@ -289,6 +301,37 @@ html, body {
   inset: -8px;
   border-radius: 50%;
   border: 1px solid rgba(255, 138, 61, 0.35);
+}
+
+/* V5 — VOID zone: hovering the anti-light sphere dims the cursor
+   instead of brightening it (section 3); a fast mouse move briefly
+   leaves a bright streak-like ring (section 19) */
+.cursor-ring.void-hover {
+  border-color: rgba(120, 110, 150, 0.4);
+  box-shadow: none;
+  width: 22px;
+  height: 22px;
+}
+.cursor-ring.void-streak {
+  border-color: var(--cyan);
+  box-shadow: 0 0 30px rgba(94, 231, 255, 0.6);
+  width: 60px;
+  height: 60px;
+}
+
+/* V6 — MORPH zone: touching the living matter dims/tightens the ring;
+   pulling it brightens the ring (sections 14, 51) */
+.cursor-ring.morph-touch {
+  border-color: var(--magenta);
+  box-shadow: 0 0 20px rgba(217, 70, 239, 0.45);
+  width: 18px;
+  height: 18px;
+}
+.cursor-ring.morph-pull {
+  border-color: var(--cyan);
+  box-shadow: 0 0 30px rgba(94, 231, 255, 0.7);
+  width: 40px;
+  height: 40px;
 }
 
 /* V2 — hold-to-charge progress ring (section 14/19) */
@@ -575,6 +618,60 @@ const CONFIG = {
     secretHoldRadius: 1.0,
     secretRequiredCount: 3,
   },
+
+  /* ----------------------------------------------------------
+     V5 — the Void zone: depth, zoom, observation, anomalies.
+     "CONSTELLATION → connecter, GRAVITY → manipuler, VOID → observer / chercher"
+  ---------------------------------------------------------- */
+  voidSphere: {
+    // the hub object that opens VOID — an "anti-light" body (section 2)
+    position: [-16, 6, -18],
+    radius: 0.34,
+  },
+  void: {
+    cameraStart: 210,
+    minDistance: 2.2,
+    maxDistance: 210,
+    // camera-distance thresholds that gate what becomes visible (sections 9-13)
+    depth1At: 150,
+    depth2At: 95,
+    depth3At: 55,
+    depth4At: 26,
+    // ANOMALIE 07 (section 20) — only visible in this narrow distance band
+    depthWindow: { min: 58, max: 74 },
+    anomalyFieldRadius: 5.5,
+    stillnessSeconds: 2.0,
+    stillnessSpeedThreshold: 4,   // px/frame below which the pointer counts as "still"
+    fastMoveThreshold: 55,        // px/frame above which a streak appears (section 19)
+  },
+
+  /* ----------------------------------------------------------
+     V6 — the Morph zone: semi-living, deformable matter.
+     "CONSTELLATION → connecter, GRAVITY → manipuler,
+      VOID → observer, MORPH → transformer"
+  ---------------------------------------------------------- */
+  morph: {
+    cameraStart: 11,
+    minDistance: 5,
+    maxDistance: 18,
+    coreRadius: 2.5,
+    detail: 3,             // icosahedron subdivision — 642 verts, cheap to deform
+    restColor: 0x8b5cf6,
+    stretchColor: 0xbfefff,
+    compressColor: 0xff7de0,
+    spring: 7.5,            // how strongly a vertex is pulled back to rest
+    damping: 3.2,            // velocity damping per second
+    pullRadius: 1.9,         // world-space falloff radius of a drag/touch
+    pullStrength: 2.6,
+    proximityRadius: 2.4,    // passive "it feels you" radius when just hovering
+    proximityStrength: 0.4,
+    rippleSpeed: 3.2,
+    rippleLife: 1.1,
+    nodeCount: 8,
+    nodeSnapDistance: 0.85,   // world distance under which two nodes may connect
+    stillnessSpeedThreshold: 0.35, // avg vertex speed under which the matter counts as "stable"
+    zoneEnergyToConfigure: 3.2,   // accumulated interaction energy to configure a phase-2 zone
+  },
 };
 
 /* ================================================================
@@ -599,6 +696,25 @@ const gameState = {
   // V4 additions
   collectedGravitySeeds: 0,
   gravityUnlocked: false,
+  // V5 additions
+  voidUnlocked: false,
+  voidAnomaliesFound: [],
+  collectedVoidShards: 0,
+  voidStructureRevealed: false,
+  voidStructureActivated: false,
+  fissureRevealed: false,
+  // V6 additions
+  morphUnlocked: false,
+  collectedMorphSeeds: 0,
+  morphProgress: {},
+  worldState: {
+    constellationInfluence: 0,
+    gravityInfluence: 0,
+    voidInfluence: 0,
+    morphInfluence: 0,
+  },
+  planetFissureSpawned: false,
+  convergenceTriggered: false,
 };
 
 /* ================================================================
@@ -1500,6 +1616,8 @@ function triggerPortalTransition() {
 let activeZone = 'hub';
 let constellationGroup;
 let gravityGroup;
+let voidGroup;
+let morphGroup;
 let zoneTransition = null; // { toZone, targetGroup, flashMaterial, startTime }
 
 const FLASH_OVERLAY = () => document.getElementById('flash-overlay');
@@ -1507,15 +1625,28 @@ const FLASH_OVERLAY = () => document.getElementById('flash-overlay');
 function getZoneCameraStart(zone) {
   if (zone === 'constellation') return CONFIG.constellation.cameraStart;
   if (zone === 'gravity') return CONFIG.gravity.cameraStart;
+  if (zone === 'void') return CONFIG.void.cameraStart;
+  if (zone === 'morph') return CONFIG.morph.cameraStart;
   return CONFIG.camera.startDistance;
 }
 
+// the wheel/pinch handlers clamp to different ranges per zone —
+// VOID needs a much deeper range since zoom IS the mechanic (section 8)
+function getZoomClampRange() {
+  if (activeZone === 'void') return [CONFIG.void.minDistance, CONFIG.void.maxDistance];
+  if (activeZone === 'morph') return [CONFIG.morph.minDistance, CONFIG.morph.maxDistance];
+  return [CONFIG.camera.minDistance, CONFIG.camera.maxDistance];
+}
+
 function enterZone(name) {
+  if (activeZone === 'morph' && name !== 'morph') exitMorph();
   activeZone = name;
   gameState.currentZone = name;
   hubGroup.visible = name === 'hub';
   constellationGroup.visible = name === 'constellation';
   gravityGroup.visible = name === 'gravity';
+  voidGroup.visible = name === 'void';
+  morphGroup.visible = name === 'morph';
 
   if (name === 'hub') {
     cameraRig.distance = CONFIG.camera.startDistance;
@@ -1526,6 +1657,17 @@ function enterZone(name) {
       `${String(gameState.discoveries).padStart(2, '0')} / DISCOVERY`;
     if (gameState.collectedCores >= 1) spawnHubCoreObject();
     if (gameState.collectedGravitySeeds >= 1) spawnHubGravitySeedObject();
+    if (gameState.collectedVoidShards >= 1) spawnHubVoidShardObject();
+    if (gameState.collectedMorphSeeds >= 1) spawnHubMorphSeedObject();
+    // reset any lingering VOID-approach effects (section 4) on the sphere
+    camera.fov = 50;
+    camera.updateProjectionMatrix();
+    scene.fog.density = 0.018;
+    voidSphereCharge = 0;
+    if (voidSphereObj) voidSphereObj.scale.setScalar(1);
+    // reset any lingering "opening" scale from the V6 fissure transition
+    if (hubFissureGroup) hubFissureGroup.scale.setScalar(1);
+    scheduleHubConvergencePeek();
   } else if (name === 'constellation') {
     cameraRig.distance = CONFIG.constellation.cameraStart;
     cameraRig.targetDistance = CONFIG.constellation.cameraStart;
@@ -1538,6 +1680,14 @@ function enterZone(name) {
     document.getElementById('progress-index').textContent = 'GRAVITY';
     document.getElementById('drag-hint').classList.add('hidden');
     showGravityFirstHint();
+  } else if (name === 'void') {
+    cameraRig.distance = CONFIG.void.cameraStart;
+    cameraRig.targetDistance = CONFIG.void.cameraStart;
+    document.getElementById('progress-index').textContent = voidProgressLabel();
+    document.getElementById('drag-hint').textContent = 'SCROLL TO GO DEEPER';
+    document.getElementById('drag-hint').classList.toggle('hidden', hasInteractedVoid);
+  } else if (name === 'morph') {
+    enterMorph();
   }
   saveGame();
 }
@@ -1549,7 +1699,9 @@ function enterZone(name) {
 function triggerZoneTransition(toZone, targetGroup, flashMaterial) {
   if (zoneTransition) return;
   const warm = toZone === 'gravity' || activeZone === 'gravity';
+  const voidFlavor = toZone === 'void' || activeZone === 'void';
   FLASH_OVERLAY().classList.toggle('warm', warm);
+  FLASH_OVERLAY().classList.toggle('void', voidFlavor);
   zoneTransition = { toZone, targetGroup, flashMaterial, startTime: clock.getElapsedTime() };
 }
 
@@ -1575,6 +1727,11 @@ function updateZoneTransition(t) {
       zoneTransition.flashMaterial.opacity = THREE.MathUtils.lerp(
         zoneTransition.flashMaterial.opacity, 0.9, p
       );
+    }
+    // V6 — MORPH transitions swell the matter itself rather than just
+    // flashing, so it reads as "traversing" it (section 4) instead of a fade
+    if ((zoneTransition.toZone === 'morph' || activeZone === 'morph') && zoneTransition.targetGroup) {
+      zoneTransition.targetGroup.scale.setScalar(1 + p * 0.7);
     }
   } else if (age < brighten + gather) {
     // phase 2/3 — particles pulled inward, the current zone slows
@@ -2726,19 +2883,549 @@ function spawnHubGravitySeedObject() {
   spawnVoidTeaser();
 }
 
-/* ----------------------------------------------------------
-   A very quiet foreshadowing of the next zone (section 39) —
-   not interactive, barely noticeable, far from everything else.
----------------------------------------------------------- */
+/* ================================================================
+   V5 — VOID: the hub-side "anti-light" sphere (sections 2-5).
+   Built with createOrbitalObject so it gets free hover/click wiring
+   from updateHubHover()/handleClick(), then its glow is overridden
+   to darken rather than brighten — the opposite of every other
+   orbital object in the hub.
+================================================================ */
 let voidTeaserSpawned = false;
+let voidSphereObj = null;
+let voidSphereCharge = 0;     // 0 = dormant, 1 = charged (2nd click enters VOID)
+let voidChargeStartTime = null;
+let hasInteractedVoid = false;
+
 function spawnVoidTeaser() {
   if (voidTeaserSpawned) return;
   voidTeaserSpawned = true;
-  const geo = new THREE.SphereGeometry(0.3, 16, 16);
-  const mat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-  const teaser = new THREE.Mesh(geo, mat);
-  teaser.position.set(-16, 6, -18);
-  hubGroup.add(teaser);
+  const cfg = CONFIG.voidSphere;
+
+  voidSphereObj = createOrbitalObject('void', {
+    position: cfg.position,
+    radius: cfg.radius,
+    color: 0x000000,
+    glowColor: 0x2a1a4a,
+    orbitRadius: 0.12,
+    orbitSpeed: 0.05,
+  });
+
+  const core = voidSphereObj.children[0];
+  core.material.emissive.setHex(0x0a0612);
+  core.material.emissiveIntensity = 0.2;
+  core.material.roughness = 0.9;
+  core.material.metalness = 0.1;
+
+  // the "glow" shell is inverted: near-black, normal-blended so it
+  // darkens whatever is behind it rather than adding light (section 2)
+  const darkShell = voidSphereObj.children[1];
+  darkShell.material.color.setHex(0x000000);
+  darkShell.material.opacity = 0.5;
+  darkShell.material.blending = THREE.NormalBlending;
+  darkShell.material.side = THREE.FrontSide;
+  darkShell.scale.setScalar(1.7);
+
+  // the halo becomes a soft dark vignette instead of a bright glow
+  const halo = voidSphereObj.userData.halo;
+  halo.material.color.setHex(0x000000);
+  halo.material.opacity = 0.35;
+  halo.material.blending = THREE.NormalBlending;
+  halo.scale.set(cfg.radius * 7, cfg.radius * 7, 1);
+
+  voidSphereObj.userData.isVoidSphere = true;
+}
+
+/* First click charges it (section 4: slow, desaturate, deepen);
+   second click actually enters VOID (section 5). */
+function handleVoidSphereClick() {
+  if (!voidSphereObj) return;
+  if (zoneTransition) return;
+  if (voidSphereCharge < 1) {
+    voidSphereCharge = 1;
+    voidChargeStartTime = clock.getElapsedTime();
+    return;
+  }
+  triggerZoneTransition('void', voidSphereObj, voidSphereObj.userData.halo.material);
+  voidSphereCharge = 0;
+}
+
+/* Per-frame charge animation — camera FOV widens, fog deepens,
+   nearby particles thin out, the sphere itself grows (section 4). */
+function updateVoidSphereCharge(t) {
+  if (activeZone !== 'hub' || voidSphereCharge < 1 || !voidSphereObj) return;
+  const age = t - voidChargeStartTime;
+  const p = Math.min(age / 3.2, 1);
+  voidSphereObj.scale.setScalar(1 + p * 2.2);
+  camera.fov = THREE.MathUtils.lerp(50, 58, p);
+  camera.updateProjectionMatrix();
+  scene.fog.density = THREE.MathUtils.lerp(0.018, 0.032, p);
+  if (nearParticles) {
+    nearParticles.material.opacity = THREE.MathUtils.lerp(nearParticles.material.opacity, 0.15, 0.02);
+  }
+}
+
+/* ================================================================
+   V5 — VOID ZONE CONTENT
+   Same architecture as every other zone: one THREE.Group toggled
+   by enterZone(). Distance from the origin is small (matching
+   CONSTELLATION/GRAVITY scale) — the sensation of depth comes from
+   the huge camera zoom range (CONFIG.void) rather than from staging
+   objects at real depth along the view axis, per section 44.
+================================================================ */
+let voidStructureGroup = null, voidStructureCore = null, voidStructureRings = [];
+let voidShardMesh = null;
+let voidReturnPortalGroup = null, voidReturnPortalDisc = null;
+let voidFarStars = null;
+let hoveredVoidTarget = null;
+let hoveredVoidStructureCore = false;
+let hoveredVoidShard = false;
+let hoveredVoidReturnPortal = false;
+let voidPointerSpeed = 0;
+let voidLastPointerX = 0, voidLastPointerY = 0, voidPointerInit = false;
+let voidStillTimer = 0;
+let voidFastStreakUntil = -1;
+let voidStructureCompletion = null;
+
+// generic anomaly registry (section 47) — each entry knows how to
+// decide its own visibility ("checkVisible") and how to react once
+// found ("react"); checkVoidAnomaly() does the raycast + bookkeeping.
+const voidAnomalies = [];
+
+function getVoidDepth() {
+  const d = cameraRig.distance;
+  const c = CONFIG.void;
+  if (d > c.depth1At) return 0;
+  if (d > c.depth2At) return 1;
+  if (d > c.depth3At) return 2;
+  if (d > c.depth4At) return 3;
+  return 4;
+}
+
+function voidProgressLabel() {
+  // deliberately not a "3 / 7" counter (section 22) — just a very
+  // subtle visual variation on the zone name
+  const found = gameState.voidAnomaliesFound.length;
+  return 'VOID' + (found > 0 ? ' ' + '·'.repeat(Math.min(found, 7)) : '');
+}
+
+function registerFirstInteractionVoid() {
+  if (hasInteractedVoid) return;
+  hasInteractedVoid = true;
+  if (activeZone === 'void') document.getElementById('drag-hint').classList.add('hidden');
+}
+
+function createVoidZone() {
+  voidGroup = new THREE.Group();
+  voidGroup.visible = false;
+  scene.add(voidGroup);
+
+  // an almost-empty deep field: a sparse, very distant starfield
+  // (section 6) — most of VOID must feel like nothing is there
+  const count = 900;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const palette = [
+    new THREE.Color(0x2a1a4a), // violet très sombre
+    new THREE.Color(0x0f1e3d), // bleu nuit
+    new THREE.Color(0x0d3a3a), // cyan très faible
+    new THREE.Color(0xffffff),
+  ];
+  for (let i = 0; i < count; i++) {
+    const r = 30 + Math.random() * 170;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+    const c = palette[Math.floor(Math.random() * (Math.random() < 0.08 ? palette.length : palette.length - 1))];
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.PointsMaterial({
+    size: 0.09,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.55,
+    sizeAttenuation: true,
+    depthWrite: false,
+  });
+  voidFarStars = new THREE.Points(geo, mat);
+  voidGroup.add(voidFarStars);
+
+  // very sparse, very dim ambient light — VOID is dark by design (section 48)
+  const violet = new THREE.PointLight(0x3a1a6a, 0.6, 40);
+  violet.position.set(3, 2, 4);
+  voidGroup.add(violet);
+  const cyan = new THREE.PointLight(0x0d5a5a, 0.4, 30);
+  cyan.position.set(-4, -2, -3);
+  voidGroup.add(cyan);
+
+  createVoidAnomalies();
+  createVoidStructure();
+  createVoidReturnPortalObject();
+}
+
+/* ----------------------------------------------------------
+   Anomalies (sections 15-21) — small objects placed within a
+   tight radius of the origin so the zoom mechanic naturally
+   reveals them tier by tier (their smallness does the work).
+---------------------------------------------------------- */
+function makeAnomalyMesh(color, radius) {
+  const geo = new THREE.IcosahedronGeometry(radius, 0);
+  const mat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  return new THREE.Mesh(geo, mat);
+}
+
+function createVoidAnomalies() {
+  const R = CONFIG.void.anomalyFieldRadius;
+  const rand = (a, b) => a + Math.random() * (b - a);
+
+  // 01 — blinks at a dissonant rhythm
+  const blink = makeAnomalyMesh(0xeaf6ff, 0.05);
+  blink.position.set(rand(-R, R), rand(-R, R), rand(-R, R));
+  voidGroup.add(blink);
+  voidAnomalies.push({
+    id: 'blink_offbeat', mesh: blink, minDepth: 1, found: false,
+    update(t) { blink.material.opacity = 0.25 + Math.abs(Math.sin(t * 3.1)) * 0.65; },
+  });
+
+  // 02 — a particle that orbits the "wrong" way
+  const rev = makeAnomalyMesh(0x9fd8ff, 0.045);
+  const revRadius = rand(1.5, R * 0.8);
+  voidGroup.add(rev);
+  voidAnomalies.push({
+    id: 'reverse_particle', mesh: rev, minDepth: 1, found: false,
+    update(t) {
+      const a = -t * 0.9; // negative = against the ambient drift
+      rev.position.set(Math.cos(a) * revRadius, Math.sin(a * 0.6) * 1.2, Math.sin(a) * revRadius);
+      rev.material.opacity = 0.7;
+    },
+  });
+
+  // 03 — ignores perspective: its world scale is corrected so its
+  // apparent size on screen never changes as the camera zooms in
+  const noPersp = makeAnomalyMesh(0xb39ddb, 0.05);
+  noPersp.position.set(rand(-R, R), rand(-R, R), rand(-R * 0.6, R * 0.6));
+  voidGroup.add(noPersp);
+  voidAnomalies.push({
+    id: 'no_perspective', mesh: noPersp, minDepth: 2, found: false,
+    update() {
+      noPersp.material.opacity = 0.6;
+      const s = cameraRig.distance / CONFIG.void.cameraStart;
+      noPersp.scale.setScalar(Math.max(s, 0.05) / 0.05 * 0.05);
+    },
+  });
+
+  // 04 — vanishes the instant the cursor touches it (found on the vanish)
+  const vanish = makeAnomalyMesh(0xffffff, 0.06);
+  vanish.position.set(rand(-R, R), rand(-R, R), rand(-R, R));
+  voidGroup.add(vanish);
+  voidAnomalies.push({
+    id: 'vanish_on_touch', mesh: vanish, minDepth: 1, found: false,
+    update(t) { if (!this.found) vanish.material.opacity = 0.55 + Math.sin(t * 1.4) * 0.15; },
+  });
+
+  // 05 — "stillness": only appears once the pointer stops moving
+  const still = makeAnomalyMesh(0xf5c56b, 0.055);
+  still.position.set(rand(-R * 0.7, R * 0.7), rand(-R * 0.7, R * 0.7), rand(-R * 0.7, R * 0.7));
+  voidGroup.add(still);
+  voidAnomalies.push({
+    id: 'stillness', mesh: still, minDepth: 2, found: false,
+    update() {
+      const revealed = voidStillTimer >= CONFIG.void.stillnessSeconds;
+      still.material.opacity = THREE.MathUtils.lerp(still.material.opacity, revealed ? 0.75 : 0, 0.08);
+      still.visible = still.material.opacity > 0.02;
+    },
+  });
+
+  // 06 — a light that follows the cursor with several seconds of lag
+  const delayed = makeAnomalyMesh(0x5ee7ff, 0.05);
+  voidGroup.add(delayed);
+  voidAnomalies.push({
+    id: 'delayed_light', mesh: delayed, minDepth: 3, found: false,
+    update() {
+      raycastPoint.set(pointer.normX, pointer.normY);
+      raycaster.setFromCamera(raycastPoint, camera);
+      const target = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(cameraRig.distance * 0.6));
+      delayed.position.lerp(target, 0.006);
+      delayed.material.opacity = 0.6;
+    },
+  });
+
+  // 07 — only exists within a narrow zoom window (section 20)
+  const window07 = makeAnomalyMesh(0xff8a3d, 0.06);
+  window07.position.set(rand(-R * 0.5, R * 0.5), rand(-R * 0.5, R * 0.5), rand(-R * 0.5, R * 0.5));
+  voidGroup.add(window07);
+  voidAnomalies.push({
+    id: 'depth_window', mesh: window07, minDepth: 0, found: false,
+    update(t) {
+      const { min, max } = CONFIG.void.depthWindow;
+      const inWindow = cameraRig.distance > min && cameraRig.distance < max;
+      window07.material.opacity = THREE.MathUtils.lerp(window07.material.opacity, inWindow ? 0.8 : 0, 0.1);
+      window07.visible = window07.material.opacity > 0.02;
+    },
+  });
+}
+
+function updateVoidAnomalies(t) {
+  const depth = getVoidDepth();
+  voidAnomalies.forEach((a) => {
+    if (a.found) { a.mesh.visible = false; return; }
+    a.mesh.visible = depth >= a.minDepth;
+    if (a.mesh.visible) a.update(t);
+  });
+}
+
+// raycast + bookkeeping shared by every anomaly type; the reaction
+// is a pulse/flash, never a popup (section 17)
+function checkVoidAnomaly(anomaly) {
+  if (anomaly.found) return;
+  anomaly.found = true;
+  gameState.voidAnomaliesFound.push(anomaly.id);
+  anomaly.mesh.userData.pulseStart = clock.getElapsedTime();
+  spawnVoidPulse(anomaly.mesh.position.clone());
+  document.getElementById('progress-index').textContent = voidProgressLabel();
+  saveGame();
+  if (gameState.voidAnomaliesFound.length >= voidAnomalies.length && !gameState.voidStructureRevealed) {
+    revealVoidStructure();
+  }
+}
+
+function spawnVoidPulse(position) {
+  const geo = new THREE.RingGeometry(0.02, 0.05, 24);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xeaf6ff, transparent: true, opacity: 0.8, side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(geo, mat);
+  ring.position.copy(position);
+  ring.lookAt(camera.position);
+  voidGroup.add(ring);
+  const start = clock.getElapsedTime();
+  (function grow() {
+    const age = clock.getElapsedTime() - start;
+    const p = Math.min(age / 1.1, 1);
+    ring.scale.setScalar(1 + p * 14);
+    mat.opacity = 0.8 * (1 - p);
+    if (p < 1) requestAnimationFrame(grow);
+    else voidGroup.remove(ring);
+  })();
+}
+
+/* ----------------------------------------------------------
+   The hidden structure (sections 28-33) — revealed only once all
+   anomalies are found. Abstract concentric rings, never a "door".
+---------------------------------------------------------- */
+function createVoidStructure() {
+  voidStructureGroup = new THREE.Group();
+  voidStructureGroup.visible = false;
+  voidStructureGroup.position.set(0, 0, -8);
+  voidGroup.add(voidStructureGroup);
+
+  [1.6, 2.3, 3.1].forEach((r, i) => {
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(r, 0.015, 8, 64),
+      new THREE.MeshBasicMaterial({
+        color: [0x9fd8ff, 0x8b5cf6, 0x5ee7ff][i],
+        transparent: true, opacity: 0.5,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      })
+    );
+    ring.rotation.x = i * 0.6;
+    ring.rotation.y = i * 0.3;
+    voidStructureGroup.add(ring);
+    voidStructureRings.push(ring);
+  });
+
+  const coreGeo = new THREE.SphereGeometry(0.09, 16, 16);
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  voidStructureCore = new THREE.Mesh(coreGeo, coreMat);
+  voidStructureGroup.add(voidStructureCore);
+}
+
+function revealVoidStructure() {
+  gameState.voidStructureRevealed = true;
+  // the void goes quieter first (section 28) — stars fade, then the
+  // structure fades in over a few seconds
+  const start = clock.getElapsedTime();
+  (function fade() {
+    const age = clock.getElapsedTime() - start;
+    const p = Math.min(age / 4, 1);
+    if (voidFarStars) voidFarStars.material.opacity = THREE.MathUtils.lerp(0.55, 0.12, p);
+    voidStructureGroup.visible = true;
+    voidStructureGroup.scale.setScalar(p);
+    voidStructureRings.forEach((r) => (r.material.opacity = 0.5 * p));
+    voidStructureCore.material.opacity = 0.9 * p;
+    if (p < 1) requestAnimationFrame(fade);
+  })();
+  saveGame();
+}
+
+function activateVoidStructure() {
+  if (gameState.voidStructureActivated) return;
+  gameState.voidStructureActivated = true;
+  const start = clock.getElapsedTime();
+  (function grow() {
+    const age = clock.getElapsedTime() - start;
+    const p = Math.min(age / 1.6, 1);
+    voidStructureCore.scale.setScalar(1 + p * 6);
+    voidStructureCore.material.opacity = 0.9 * (1 - p * 0.5);
+    if (p < 1) { requestAnimationFrame(grow); return; }
+    spawnVoidShard();
+  })();
+  saveGame();
+}
+
+/* ----------------------------------------------------------
+   Void Shard (sections 34-35)
+---------------------------------------------------------- */
+function spawnVoidShard() {
+  if (voidShardMesh) return;
+  const geo = new THREE.OctahedronGeometry(0.14, 0);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x050208, emissive: 0x2a1a4a, emissiveIntensity: 1.1,
+    metalness: 0.4, roughness: 0.3, flatShading: true,
+  });
+  voidShardMesh = new THREE.Mesh(geo, mat);
+  voidShardMesh.position.copy(voidStructureGroup.position).add(new THREE.Vector3(0, 0.5, 0.3));
+  voidGroup.add(voidShardMesh);
+}
+
+function collectVoidShard() {
+  if (!voidShardMesh) return;
+  const start = clock.getElapsedTime();
+  const from = voidShardMesh.position.clone();
+  (function collectAnim() {
+    const age = clock.getElapsedTime() - start;
+    const p = Math.min(age / 1.1, 1);
+    voidShardMesh.position.lerpVectors(from, camera.position, p * 0.9);
+    voidShardMesh.scale.setScalar(1 - p * 0.9);
+    if (p < 1) { requestAnimationFrame(collectAnim); return; }
+    voidGroup.remove(voidShardMesh);
+    voidShardMesh = null;
+    gameState.collectedVoidShards += 1;
+    revealVoidReturnPortal();
+    showCenterMessage('VOID SHARD');
+    saveGame();
+  })();
+}
+
+/* ----------------------------------------------------------
+   Return portal (section 36) — almost invisible, unlike the
+   other zones' return portals.
+---------------------------------------------------------- */
+function createVoidReturnPortalObject() {
+  voidReturnPortalGroup = new THREE.Group();
+  voidReturnPortalGroup.visible = false;
+  voidReturnPortalGroup.position.set(0, -1.2, 4);
+  voidGroup.add(voidReturnPortalGroup);
+
+  const ringGeo = new THREE.TorusGeometry(0.5, 0.01, 8, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0x1a1330, transparent: true, opacity: 0.12,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  voidReturnPortalGroup.add(new THREE.Mesh(ringGeo, ringMat));
+
+  const discGeo = new THREE.CircleGeometry(0.45, 32);
+  const discMat = new THREE.MeshBasicMaterial({
+    color: 0x2a1a4a, transparent: true, opacity: 0.08,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+  });
+  voidReturnPortalDisc = new THREE.Mesh(discGeo, discMat);
+  voidReturnPortalGroup.add(voidReturnPortalDisc);
+}
+
+function revealVoidReturnPortal() {
+  voidReturnPortalGroup.visible = true;
+}
+
+/* ----------------------------------------------------------
+   Hover + per-frame update for the VOID zone
+---------------------------------------------------------- */
+function updateVoidHover() {
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+
+  const targets = [];
+  voidAnomalies.forEach((a) => { if (a.mesh.visible && !a.found) targets.push(a.mesh); });
+  if (voidStructureGroup.visible && voidStructureCore) targets.push(voidStructureCore);
+  if (voidShardMesh) targets.push(voidShardMesh);
+  if (voidReturnPortalGroup.visible) targets.push(voidReturnPortalDisc);
+
+  const intersects = raycaster.intersectObjects(targets, false);
+  const ring = document.getElementById('cursor-ring');
+
+  hoveredVoidTarget = null;
+  hoveredVoidStructureCore = false;
+  hoveredVoidShard = false;
+  hoveredVoidReturnPortal = false;
+
+  if (intersects.length > 0) {
+    const obj = intersects[0].object;
+    ring.classList.add('hover');
+    if (obj === voidStructureCore) {
+      hoveredVoidStructureCore = true;
+    } else if (obj === voidShardMesh) {
+      hoveredVoidShard = true;
+    } else if (obj === voidReturnPortalDisc) {
+      hoveredVoidReturnPortal = true;
+    } else {
+      const anomaly = voidAnomalies.find((a) => a.mesh === obj);
+      if (anomaly) {
+        hoveredVoidTarget = anomaly;
+        checkVoidAnomaly(anomaly);
+      }
+    }
+  } else {
+    ring.classList.remove('hover');
+  }
+}
+
+function updateVoidZone(t, delta) {
+  if (activeZone !== 'void' && !zoneTransition) return;
+
+  updateVoidAnomalies(t);
+
+  if (voidStructureGroup.visible) {
+    voidStructureRings.forEach((r, i) => { r.rotation.z += 0.003 * (i + 1) * (voidReturnPortalGroup.visible ? 0.3 : 1); });
+    const breathe = 1 + Math.sin(t * 0.7) * 0.08;
+    voidStructureCore.scale.setScalar(gameState.voidStructureActivated ? voidStructureCore.scale.x : breathe);
+  }
+  if (voidReturnPortalGroup.visible) {
+    voidReturnPortalDisc.material.opacity = 0.06 + Math.sin(t * 1.1) * 0.03;
+  }
+  if (voidShardMesh) {
+    voidShardMesh.rotation.y += 0.02;
+    voidShardMesh.rotation.x += 0.008;
+  }
+
+  // pointer speed → stillness timer (section 18) + fast-move streak (section 19)
+  if (activeZone === 'void') {
+    if (!voidPointerInit) { voidLastPointerX = pointer.x; voidLastPointerY = pointer.y; voidPointerInit = true; }
+    const dx = pointer.x - voidLastPointerX;
+    const dy = pointer.y - voidLastPointerY;
+    voidPointerSpeed = Math.sqrt(dx * dx + dy * dy);
+    voidLastPointerX = pointer.x;
+    voidLastPointerY = pointer.y;
+
+    if (voidPointerSpeed < CONFIG.void.stillnessSpeedThreshold) {
+      voidStillTimer += delta;
+    } else {
+      voidStillTimer = 0;
+    }
+    if (voidPointerSpeed > CONFIG.void.fastMoveThreshold) {
+      voidFastStreakUntil = t + 0.3;
+    }
+    document.getElementById('cursor-ring').classList.toggle('void-streak', t < voidFastStreakUntil);
+  }
 }
 
 let hubCoreSpawned = false;
@@ -2758,6 +3445,1007 @@ function spawnHubCoreObject() {
   // a small visible sign that the planet has changed (section 24)
   glowMesh.material.opacity = Math.min(CONFIG.planet.glowOpacity * 1.3, 0.5);
   ringMeshes.forEach((r) => (r.userData.baseOpacity = Math.min(r.userData.baseOpacity * 1.15, 0.6)));
+}
+
+/* ----------------------------------------------------------
+   V5 — Void Shard's effect on the hub (section 37): a small
+   dark object that quietly dims and slows whatever is near it.
+---------------------------------------------------------- */
+let hubVoidShardSpawned = false;
+function spawnHubVoidShardObject() {
+  if (hubVoidShardSpawned) return;
+  hubVoidShardSpawned = true;
+  createOrbitalObject('voidShard', {
+    position: [-9.5, 4.5, -6.5],
+    radius: 0.16,
+    color: 0x050208,
+    glowColor: 0x2a1a4a,
+    orbitRadius: 0.2,
+    orbitSpeed: 0.06,
+  });
+  const shard = orbitalObjects.voidShard;
+  shard.userData.isHubTrophy = true;
+  shard.userData.collected = true; // decorative only — not re-collectible
+  shard.children[1].material.blending = THREE.NormalBlending;
+  shard.children[1].material.opacity = 0.4;
+  shard.userData.halo.material.color.setHex(0x000000);
+  shard.userData.halo.material.blending = THREE.NormalBlending;
+  shard.userData.halo.material.opacity = 0.3;
+  // objects orbiting nearby are slightly slowed (a quiet nod to section 37)
+  Object.values(orbitalObjects).forEach((o) => {
+    if (o !== shard) o.userData.orbitSpeed *= 0.97;
+  });
+  spawnFissureTeaser();
+}
+
+/* ----------------------------------------------------------
+   V5/V6 — the crack in the hub (sections 38-39 in V5, then the actual
+   doorway into MORPH in V6): dormant at first, then interactive.
+---------------------------------------------------------- */
+let fissureTeaserSpawned = false;
+let hubFissureGroup = null, hubFissureVisible = null, hubFissureHit = null;
+let hoveredHubFissure = false;
+
+function spawnFissureTeaser() {
+  if (fissureTeaserSpawned) return;
+  fissureTeaserSpawned = true;
+  gameState.fissureRevealed = true;
+
+  hubFissureGroup = new THREE.Group();
+  hubFissureGroup.position.set(0, 7.2, -2);
+  hubFissureGroup.rotation.z = 0.4;
+
+  const geo = new THREE.PlaneGeometry(0.02, 1.4);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xeaf6ff, transparent: true, opacity: 0.35,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+  });
+  hubFissureVisible = new THREE.Mesh(geo, mat);
+  hubFissureGroup.add(hubFissureVisible);
+
+  // a soft halo so the crack reads as "containing something" (section 2)
+  const haloMat = new THREE.SpriteMaterial({
+    map: makeGlowTexture(), color: 0xd6b8ff, transparent: true,
+    opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const halo = new THREE.Sprite(haloMat);
+  halo.scale.set(1.6, 1.6, 1);
+  hubFissureGroup.add(halo);
+  hubFissureGroup.userData.halo = halo;
+
+  // a much larger, invisible plane purely so the thin crack is easy to hit
+  const hitGeo = new THREE.PlaneGeometry(1.2, 2.2);
+  const hitMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
+  hubFissureHit = new THREE.Mesh(hitGeo, hitMat);
+  hubFissureGroup.add(hubFissureHit);
+
+  hubGroup.add(hubFissureGroup);
+}
+
+/* the fissure breathes and deforms slightly as the cursor nears/hovers it
+   (sections 2-3) — it "almost seems to breathe" even before it's clicked */
+function updateHubFissure(t) {
+  if (!hubFissureGroup) return;
+  const breathe = 1 + Math.sin(t * 0.6) * 0.05;
+  const hoverBoost = hoveredHubFissure ? 1.3 : 1;
+  hubFissureVisible.scale.set(hoverBoost, breathe * hoverBoost, 1);
+  hubFissureGroup.userData.halo.material.opacity = hoveredHubFissure
+    ? 0.42
+    : 0.2 + Math.sin(t * 0.6) * 0.05;
+}
+
+/* clicking the fissure opens it and carries the player into MORPH
+   (sections 3-4) — the zone transition itself has a MORPH-specific
+   "matter swell" phase (see updateZoneTransition) so it doesn't read
+   as a plain fade */
+function enterMorphFromFissure() {
+  if (zoneTransition) return;
+  gameState.morphUnlocked = true;
+  triggerZoneTransition('morph', hubFissureGroup, hubFissureVisible.material);
+}
+
+/* ----------------------------------------------------------
+   V6 — Morph Seed's effect on the hub (section 35, 37): the last of
+   the four relics. Once collected, the four trophies quietly begin
+   to react with one another, and the planet gets its first real
+   fissure (sections 36-40).
+---------------------------------------------------------- */
+let hubMorphSeedSpawned = false;
+function spawnHubMorphSeedObject() {
+  if (hubMorphSeedSpawned) return;
+  hubMorphSeedSpawned = true;
+  createOrbitalObject('morphSeed', {
+    position: [2.4, 5.4, -5.2],
+    radius: 0.18,
+    color: 0x1a0f2a,
+    glowColor: 0xd946ef,
+    orbitRadius: 0.3,
+    orbitSpeed: 0.4,
+  });
+  const seed = orbitalObjects.morphSeed;
+  seed.userData.isHubTrophy = true;
+  seed.userData.collected = true; // decorative only — not re-collectible
+  seed.children[0].material.emissiveIntensity = 1.3;
+  if (ringMeshes[2]) {
+    ringMeshes[2].userData.baseOpacity = Math.min(ringMeshes[2].userData.baseOpacity * 1.2, 0.6);
+  }
+  // a nod to section 37: the Gravity Seed and Void Shard drift very
+  // slightly toward one another once Morph joins the mix
+  if (orbitalObjects.gravitySeed && orbitalObjects.voidShard) {
+    const a = orbitalObjects.gravitySeed.userData.basePosition;
+    const b = orbitalObjects.voidShard.userData.basePosition;
+    const mid = a.clone().lerp(b, 0.5);
+    a.lerp(mid, 0.06);
+    b.lerp(mid, 0.06);
+  }
+  checkRelicConvergence();
+}
+
+/* ----------------------------------------------------------
+   V6 — WORLD REACTION (sections 36-40): once all four relics exist,
+   the hub converges quietly — no message, no new zone yet, just a
+   changed planet with its first real fissure.
+---------------------------------------------------------- */
+function checkRelicConvergence() {
+  if (gameState.convergenceTriggered) return;
+  if (
+    gameState.collectedCores >= 1 &&
+    gameState.collectedGravitySeeds >= 1 &&
+    gameState.collectedVoidShards >= 1 &&
+    gameState.collectedMorphSeeds >= 1
+  ) {
+    triggerConvergence();
+  }
+}
+
+function triggerConvergence() {
+  gameState.convergenceTriggered = true;
+  gameState.worldState.constellationInfluence = 1;
+  gameState.worldState.gravityInfluence = 1;
+  gameState.worldState.voidInfluence = 1;
+  gameState.worldState.morphInfluence = 1;
+  // rings slow, particles gather — a quiet event, deliberately no message
+  ringMeshes.forEach((r) => { r.userData.speed *= 0.5; });
+  if (nearParticles) nearParticles.material.opacity = Math.min(nearParticles.material.opacity, 0.5);
+  createPlanetFissure();
+  saveGame();
+}
+
+/* a small crack directly on the planet's own surface (sections 38-40) —
+   not a new zone, just the biggest hint yet, and it stays inaccessible */
+let planetFissureMesh = null;
+function createPlanetFissure() {
+  if (planetFissureMesh) return;
+  gameState.planetFissureSpawned = true;
+  const geo = new THREE.PlaneGeometry(0.03, 0.9);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xf5c56b, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+  });
+  planetFissureMesh = new THREE.Mesh(geo, mat);
+  // tucked mostly out of the default framing — the section-60 auto
+  // rotation is what actually reveals it
+  planetFissureMesh.position.set(0.4, 0.2, -CONFIG.planet.radius * 0.98);
+  planetFissureMesh.rotation.y = Math.PI;
+  planetFissureMesh.userData.peekBoost = 0.15;
+  planetGroup.add(planetFissureMesh);
+}
+
+function updatePlanetFissure(t) {
+  if (!planetFissureMesh) return;
+  const breathe = Math.max(0, Math.sin(t * 0.35));
+  planetFissureMesh.material.opacity = breathe * 0.5 * planetFissureMesh.userData.peekBoost;
+}
+
+/* ----------------------------------------------------------
+   V6 — section 60: the very last, wordless moment of this version.
+   A few seconds after returning to a fully-converged hub, the camera
+   drifts on its own and the planet's fissure opens for a moment.
+---------------------------------------------------------- */
+let hubPeekTimer = null;
+let hubPeekActive = null; // { start }
+function scheduleHubConvergencePeek() {
+  if (!gameState.convergenceTriggered) return;
+  clearTimeout(hubPeekTimer);
+  hubPeekTimer = setTimeout(() => {
+    if (activeZone === 'hub' && !zoneTransition) {
+      hubPeekActive = { start: clock.getElapsedTime() };
+    }
+  }, 5000);
+}
+
+function updateHubConvergencePeek(t) {
+  if (!hubPeekActive) return;
+  const age = t - hubPeekActive.start;
+  const duration = 6;
+  if (activeZone !== 'hub' || age > duration) { hubPeekActive = null; return; }
+  // a very slow automatic rotation, independent of the player's own drag
+  worldGroup.rotation.y += 0.0015;
+  if (planetFissureMesh) {
+    const openWindow = age > 3 && age < 4.4;
+    planetFissureMesh.userData.peekBoost = openWindow ? 1 : 0.15;
+  }
+}
+
+/* ================================================================
+   V6 — MORPH ZONE CONTENT
+   Same one-group-per-zone architecture as CONSTELLATION/GRAVITY/VOID
+   (section 46). The "physics" is a simple mass-spring model applied
+   directly to the vertices of one big deformable sphere — no external
+   soft-body engine, per section 11.
+================================================================ */
+let morphCoreMesh = null;
+let morphOriginalPositions = null; // Float32Array — rest shape, baked-in irregularity (section 7)
+let morphVelocities = null;        // Float32Array — per-vertex velocity
+let morphVertexCount = 0;
+let morphVertexZone = null;        // Int8Array — which phase-2 zone (section 27) each vertex belongs to
+let morphNodeMeshes = [];
+let morphNodeLines = null;
+let morphConnectedPairs = new Set();
+let morphSeedGroup = null;
+let morphReturnPortalGroup = null, morphReturnPortalDisc = null;
+let morphAmbientParticles = null;
+let hoveredMorphCore = false;
+let hoveredMorphSeed = false;
+let hoveredMorphReturnPortal = false;
+let morphDragging = false;
+let morphDragPointLocal = null;   // THREE.Vector3 — current interaction target, in morphCoreMesh-local space
+let morphDragStartPoint = null;   // THREE.Vector3 — captured at drag start, for the secret gesture (section 42)
+let morphPointerSpeed = 0;
+let morphLastClientX = 0, morphLastClientY = 0, morphPointerInit = false;
+let morphRipples = [];            // { center: Vector3, birth, strength }
+let morphPhase = 'core';          // 'core' -> 'zones' -> 'transform' -> 'seed'
+let morphZoneEnergy = [0, 0, 0];
+let morphZoneConfigured = [false, false, false];
+let morphTransformAnim = null;
+let morphSecretActive = null;
+let morphGestureLog = [];
+let morphHintTimers = [];
+let hasInteractedMorph = false;
+
+function createMorphZone() {
+  morphGroup = new THREE.Group();
+  morphGroup.visible = false;
+  scene.add(morphGroup);
+
+  // ambient lighting: the "vivante" palette from sections 5 and 52
+  const violet = new THREE.PointLight(0x8b5cf6, 1.1, 30);
+  violet.position.set(3, 2, 4);
+  morphGroup.add(violet);
+  const magenta = new THREE.PointLight(0xd946ef, 1.0, 26);
+  magenta.position.set(-3, -1, 3);
+  morphGroup.add(magenta);
+  const cyan = new THREE.PointLight(0x5ee7ff, 0.5, 20);
+  cyan.position.set(0, -3, -4);
+  morphGroup.add(cyan);
+  const orange = new THREE.PointLight(0xff8a3d, 0.4, 20);
+  orange.position.set(4, -2, -3);
+  morphGroup.add(orange);
+
+  // soft drifting halos (section 5 — "halos doux")
+  [0x8b5cf6, 0xd946ef, 0x5ee7ff].forEach((color, i) => {
+    const mat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(), color, transparent: true,
+      opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const halo = new THREE.Sprite(mat);
+    halo.scale.set(9, 9, 1);
+    halo.position.set(Math.cos(i * 2.4) * 5, Math.sin(i * 1.7) * 4, -3 - i * 2);
+    morphGroup.add(halo);
+  });
+
+  // floating ambient particles (section 5), same Points pattern as other zones
+  const count = 260;
+  const positions = new Float32Array(count * 3);
+  for (let i = 0; i < count; i++) {
+    const r = 4 + Math.random() * 7;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const mat = new THREE.PointsMaterial({
+    color: 0xf0b8ff, size: 0.05, transparent: true, opacity: 0.4, sizeAttenuation: true,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  morphAmbientParticles = new THREE.Points(geo, mat);
+  morphGroup.add(morphAmbientParticles);
+
+  createMorphCore();
+  createMorphNodes();
+  createMorphSeed();
+  createMorphReturnPortalObject();
+}
+
+/* the central deformable mass (sections 6-7) */
+function createMorphCore() {
+  const cfg = CONFIG.morph;
+  const geo = new THREE.IcosahedronGeometry(cfg.coreRadius, cfg.detail);
+  const posAttr = geo.attributes.position;
+  morphVertexCount = posAttr.count;
+
+  // bake a small persistent irregularity into the rest shape (section 7):
+  // "presque sphérique... mais très légèrement irrégulière"
+  morphOriginalPositions = new Float32Array(posAttr.array.length);
+  morphVertexZone = new Int8Array(morphVertexCount);
+  for (let i = 0; i < morphVertexCount; i++) {
+    const ix = i * 3;
+    const x = posAttr.array[ix], y = posAttr.array[ix + 1], z = posAttr.array[ix + 2];
+    const len = Math.sqrt(x * x + y * y + z * z) || 1;
+    const nx = x / len, ny = y / len, nz = z / len;
+    const wobble = 1 + (Math.sin(nx * 11 + ny * 7) * 0.5 + Math.sin(nz * 13) * 0.5) * 0.02;
+    morphOriginalPositions[ix] = x * wobble;
+    morphOriginalPositions[ix + 1] = y * wobble;
+    morphOriginalPositions[ix + 2] = z * wobble;
+
+    // which phase-2 zone this vertex belongs to (sections 26-27), by longitude thirds
+    const angle = Math.atan2(nz, nx) + Math.PI; // 0..2*PI
+    morphVertexZone[i] = Math.min(2, Math.floor((angle / (Math.PI * 2)) * 3));
+  }
+  posAttr.array.set(morphOriginalPositions);
+  posAttr.needsUpdate = true;
+  geo.computeVertexNormals();
+
+  morphVelocities = new Float32Array(morphVertexCount * 3);
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: cfg.restColor,
+    emissive: cfg.restColor,
+    emissiveIntensity: 0.5,
+    metalness: 0.2,
+    roughness: 0.35,
+    flatShading: false,
+  });
+  morphCoreMesh = new THREE.Mesh(geo, mat);
+  morphCoreMesh.userData.restColor = new THREE.Color(cfg.restColor);
+  morphCoreMesh.userData.stretchColor = new THREE.Color(cfg.stretchColor);
+  morphCoreMesh.userData.compressColor = new THREE.Color(cfg.compressColor);
+  morphGroup.add(morphCoreMesh);
+
+  const glowGeo = new THREE.IcosahedronGeometry(cfg.coreRadius * 1.12, 1);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: cfg.restColor, transparent: true, opacity: 0.22,
+    side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  morphCoreMesh.add(glow);
+  morphCoreMesh.userData.glow = glow;
+}
+
+/* 8 energy points, attached to actual surface vertices so they truly
+   follow the deformation instead of floating in space (sections 18-19) */
+function createMorphNodes() {
+  const n = CONFIG.morph.nodeCount;
+  const posAttr = morphCoreMesh.geometry.attributes.position;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = golden * i;
+    const target = new THREE.Vector3(
+      Math.cos(theta) * radiusAtY,
+      y,
+      Math.sin(theta) * radiusAtY
+    ).multiplyScalar(CONFIG.morph.coreRadius);
+
+    let bestIndex = 0, bestDist = Infinity;
+    for (let v = 0; v < morphVertexCount; v++) {
+      const vix = v * 3;
+      const dx = target.x - posAttr.array[vix];
+      const dy = target.y - posAttr.array[vix + 1];
+      const dz = target.z - posAttr.array[vix + 2];
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bestDist) { bestDist = d; bestIndex = v; }
+    }
+
+    const geo = new THREE.SphereGeometry(0.09, 12, 12);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 });
+    const node = new THREE.Mesh(geo, mat);
+    node.userData.vertexIndex = bestIndex;
+    node.userData.id = i;
+    morphGroup.add(node);
+    morphNodeMeshes.push(node);
+  }
+
+  morphNodeLines = new THREE.Group();
+  morphGroup.add(morphNodeLines);
+}
+
+/* keeps the nodes glued to the deforming surface, then checks the puzzle */
+function updateMorphNodes() {
+  const posAttr = morphCoreMesh.geometry.attributes.position;
+  morphNodeMeshes.forEach((node) => {
+    const i = node.userData.vertexIndex;
+    node.position.set(
+      posAttr.array[i * 3],
+      posAttr.array[i * 3 + 1],
+      posAttr.array[i * 3 + 2]
+    );
+  });
+  checkMorphConfiguration();
+}
+
+/* sections 20-24: nodes must be pulled together (not dragged directly)
+   and held steady before a connection is accepted */
+function checkMorphConfiguration() {
+  if (morphPhase !== 'core') return;
+
+  let speedSum = 0;
+  for (let i = 0; i < morphVertexCount; i++) {
+    const ix = i * 3;
+    speedSum += Math.abs(morphVelocities[ix]) + Math.abs(morphVelocities[ix + 1]) + Math.abs(morphVelocities[ix + 2]);
+  }
+  const stable = (speedSum / morphVertexCount) < CONFIG.morph.stillnessSpeedThreshold;
+
+  const n = morphNodeMeshes.length;
+  const half = n / 2;
+  let changed = false;
+
+  for (let i = 0; i < half; i++) {
+    const a = morphNodeMeshes[i];
+    const b = morphNodeMeshes[i + half]; // roughly opposite node — pulling matter together to connect
+    const key = i + '-' + (i + half);
+    const dist = a.position.distanceTo(b.position);
+
+    if (dist < CONFIG.morph.nodeSnapDistance && stable) {
+      if (!morphConnectedPairs.has(key)) {
+        morphConnectedPairs.add(key);
+        changed = true;
+        a.material.color.setHex(0xf5c56b);
+        b.material.color.setHex(0xf5c56b);
+        createMorphRipple(a.position.clone(), 0.5);
+      }
+    } else if (dist > CONFIG.morph.nodeSnapDistance * 1.6 && morphConnectedPairs.has(key)) {
+      morphConnectedPairs.delete(key);
+      changed = true;
+      a.material.color.setHex(0xffffff);
+      b.material.color.setHex(0xffffff);
+    }
+  }
+
+  if (changed) {
+    while (morphNodeLines.children.length) {
+      const l = morphNodeLines.children[0];
+      morphNodeLines.remove(l);
+      l.geometry.dispose();
+      l.material.dispose();
+    }
+    morphConnectedPairs.forEach((key) => {
+      const [ai, bi] = key.split('-').map(Number);
+      const a = morphNodeMeshes[ai], b = morphNodeMeshes[bi];
+      const lineMat = new THREE.LineBasicMaterial({ color: 0xf5c56b, transparent: true, opacity: 0.6 });
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([a.position, b.position]);
+      morphNodeLines.add(new THREE.Line(lineGeo, lineMat));
+    });
+    gameState.morphProgress.connectedPairs = Array.from(morphConnectedPairs);
+    document.getElementById('progress-index').textContent = `MORPH ${morphConnectedPairs.size}/${half}`;
+  }
+
+  if (morphConnectedPairs.size >= half) {
+    completeMorphPuzzle();
+  }
+}
+
+/* sections 25-28: first puzzle solved — the matter splits into 3 zones */
+function completeMorphPuzzle() {
+  if (morphPhase !== 'core') return;
+  morphPhase = 'zones';
+  showCenterMessage('MORPH');
+  gameState.morphProgress.puzzleSolved = true;
+  saveGame();
+
+  morphZoneEnergy = [0, 0, 0];
+  morphZoneConfigured = [false, false, false];
+
+  const zoneColors = [0x5ee7ff, 0xff8a3d, 0xd946ef]; // attract / repulse / elastic (section 27)
+  for (let i = 0; i < 3; i++) {
+    const angle = (i / 3) * Math.PI * 2 + Math.PI / 3;
+    const mat = new THREE.SpriteMaterial({
+      map: makeGlowTexture(), color: zoneColors[i], transparent: true,
+      opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const marker = new THREE.Sprite(mat);
+    marker.scale.set(1.6, 1.6, 1);
+    marker.position.set(
+      Math.cos(angle) * CONFIG.morph.coreRadius * 1.3,
+      0,
+      Math.sin(angle) * CONFIG.morph.coreRadius * 1.3
+    );
+    morphGroup.add(marker);
+  }
+}
+
+/* low-level per-vertex impulse, aware of the phase-2 zone properties
+   (section 27: attirante / répulsive / élastique) */
+function applyMorphForce(vertexIndex, dir, mag) {
+  const ix = vertexIndex * 3;
+  let m = mag;
+  if (morphPhase === 'zones') {
+    const zone = morphVertexZone[vertexIndex];
+    if (zone === 0) m *= 1.5;        // attirante — pulls in harder
+    else if (zone === 1) m *= -1.0;  // répulsive — pushes away instead of following
+    else m *= 0.6;                    // élastique — softer touch, lingers via a weaker spring
+    morphZoneEnergy[zone] += Math.abs(mag) * 0.02;
+  }
+  morphVelocities[ix] += dir.x * m;
+  morphVelocities[ix + 1] += dir.y * m;
+  morphVelocities[ix + 2] += dir.z * m;
+}
+
+/* distance = vertex.distanceTo(hitPoint); influence = smoothFalloff(distance);
+   vertex.position += direction * influence * strength — as sketched in section 8 */
+function deformMorphAtPoint(pointLocal, strength) {
+  const posAttr = morphCoreMesh.geometry.attributes.position;
+  const radius = CONFIG.morph.pullRadius;
+  for (let i = 0; i < morphVertexCount; i++) {
+    const ix = i * 3;
+    const vx = posAttr.array[ix], vy = posAttr.array[ix + 1], vz = posAttr.array[ix + 2];
+    const dx = pointLocal.x - vx, dy = pointLocal.y - vy, dz = pointLocal.z - vz;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist > radius) continue;
+    const influence = 1 - dist / radius;
+    const eased = influence * influence * (3 - 2 * influence); // smoothFalloff
+    const inv = dist || 1;
+    applyMorphForce(i, { x: dx / inv, y: dy / inv, z: dz / inv }, eased * strength);
+  }
+}
+
+/* section 15 — an outward traveling wave from a point of impact */
+function createMorphRipple(pointLocal, strength) {
+  morphRipples.push({ center: pointLocal.clone(), birth: clock.getElapsedTime(), strength });
+}
+
+/* the main per-frame integrator (section 11):
+   force = (originalPosition - currentPosition) * spring
+   velocity += force * delta; velocity *= damping; position += velocity * delta */
+function updateMorphPhysics(t, delta) {
+  const cfg = CONFIG.morph;
+  const posAttr = morphCoreMesh.geometry.attributes.position;
+
+  for (let r = morphRipples.length - 1; r >= 0; r--) {
+    const ripple = morphRipples[r];
+    const age = t - ripple.birth;
+    if (age > cfg.rippleLife) { morphRipples.splice(r, 1); continue; }
+    const waveRadius = age * cfg.rippleSpeed;
+    const fade = 1 - age / cfg.rippleLife;
+    for (let i = 0; i < morphVertexCount; i++) {
+      const ix = i * 3;
+      const vx = posAttr.array[ix], vy = posAttr.array[ix + 1], vz = posAttr.array[ix + 2];
+      const dx = vx - ripple.center.x, dy = vy - ripple.center.y, dz = vz - ripple.center.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const band = Math.abs(dist - waveRadius);
+      if (band < 0.5) {
+        const push = (1 - band / 0.5) * ripple.strength * fade;
+        const inv = dist || 1;
+        morphVelocities[ix] += (dx / inv) * push * delta * 6;
+        morphVelocities[ix + 1] += (dy / inv) * push * delta * 6;
+        morphVelocities[ix + 2] += (dz / inv) * push * delta * 6;
+      }
+    }
+  }
+
+  // continuous interaction: a strong pull while dragging (scaled by cursor
+  // speed, section 12), or a much gentler passive attraction just from
+  // being near, even without clicking (section 13)
+  if (morphDragPointLocal) {
+    const strength = morphDragging
+      ? cfg.pullStrength * (0.5 + Math.min(morphPointerSpeed / 30, 2))
+      : cfg.proximityStrength;
+    deformMorphAtPoint(morphDragPointLocal, strength * delta * 6);
+  }
+
+  const secretActive = morphSecretActive && (t - morphSecretActive.start) < 3.0;
+
+  for (let i = 0; i < morphVertexCount; i++) {
+    const ix = i * 3;
+    const ox = morphOriginalPositions[ix], oy = morphOriginalPositions[ix + 1], oz = morphOriginalPositions[ix + 2];
+
+    // several independent slow motions layered together (sections 53-54):
+    // breathing + per-vertex noise, never a single obvious up/down loop
+    const breathe = 1 + Math.sin(t * 0.6) * 0.012;
+    const noise = Math.sin(t * 1.3 + i * 0.37) * 0.01 + Math.cos(t * 0.9 + i * 0.21) * 0.008;
+    let tx = ox * (breathe + noise);
+    let ty = oy * (breathe + noise);
+    let tz = oz * (breathe + noise);
+
+    if (secretActive) {
+      // section 43 — a completely different shape for a few seconds
+      const len = Math.sqrt(ox * ox + oy * oy + oz * oz) || 1;
+      const nx = ox / len, ny = oy / len, nz = oz / len;
+      const lobe = Math.sin(Math.atan2(nz, nx) * 6 + t * 2) * 0.35 + Math.sin(ny * 8) * 0.2;
+      const r = CONFIG.morph.coreRadius * (1 + lobe);
+      tx = nx * r; ty = ny * r; tz = nz * r;
+    }
+
+    const cx = posAttr.array[ix], cy = posAttr.array[ix + 1], cz = posAttr.array[ix + 2];
+    const spring = secretActive
+      ? cfg.spring * 2.5
+      : (morphPhase === 'zones' && morphVertexZone[i] === 2 ? cfg.spring * 0.4 : cfg.spring);
+
+    const fx = (tx - cx) * spring;
+    const fy = (ty - cy) * spring;
+    const fz = (tz - cz) * spring;
+    const dampFactor = Math.max(0, 1 - cfg.damping * delta);
+
+    morphVelocities[ix] = (morphVelocities[ix] + fx * delta) * dampFactor;
+    morphVelocities[ix + 1] = (morphVelocities[ix + 1] + fy * delta) * dampFactor;
+    morphVelocities[ix + 2] = (morphVelocities[ix + 2] + fz * delta) * dampFactor;
+
+    posAttr.array[ix] += morphVelocities[ix] * delta;
+    posAttr.array[ix + 1] += morphVelocities[ix + 1] * delta;
+    posAttr.array[ix + 2] += morphVelocities[ix + 2] * delta;
+  }
+  posAttr.needsUpdate = true;
+  morphCoreMesh.geometry.computeVertexNormals();
+
+  // section 16 — color follows deformation; sampled on a subset of
+  // vertices each frame, which is plenty smooth and much cheaper
+  let signedSum = 0, samples = 0;
+  const step = Math.max(1, Math.floor(morphVertexCount / 60));
+  for (let i = 0; i < morphVertexCount; i += step) {
+    const ix = i * 3;
+    const restLen = Math.sqrt(
+      morphOriginalPositions[ix] ** 2 + morphOriginalPositions[ix + 1] ** 2 + morphOriginalPositions[ix + 2] ** 2
+    ) || 1;
+    const curLen = Math.sqrt(posAttr.array[ix] ** 2 + posAttr.array[ix + 1] ** 2 + posAttr.array[ix + 2] ** 2);
+    signedSum += (curLen - restLen) / restLen;
+    samples++;
+  }
+  const avgSigned = signedSum / samples;
+  const targetColor = avgSigned > 0
+    ? morphCoreMesh.userData.restColor.clone().lerp(morphCoreMesh.userData.stretchColor, Math.min(avgSigned * 6, 1))
+    : morphCoreMesh.userData.restColor.clone().lerp(morphCoreMesh.userData.compressColor, Math.min(-avgSigned * 6, 1));
+  morphCoreMesh.material.color.lerp(targetColor, 0.08);
+  morphCoreMesh.material.emissive.lerp(targetColor, 0.08);
+
+  updateMorphNodes();
+
+  if (morphPhase === 'zones') {
+    for (let z = 0; z < 3; z++) {
+      if (!morphZoneConfigured[z] && morphZoneEnergy[z] >= cfg.zoneEnergyToConfigure) {
+        morphZoneConfigured[z] = true;
+        createMorphRipple(new THREE.Vector3(0, 0, 0), 0.8);
+      }
+      morphZoneEnergy[z] *= 0.995; // slowly decays if the player stops engaging that zone
+    }
+    if (morphZoneConfigured.every(Boolean) && !morphTransformAnim) {
+      triggerMorphTransform();
+    }
+  }
+}
+
+/* sections 29-31: the big visual moment — contraction, then a single
+   sharp release (never a classic explosion) */
+function triggerMorphTransform() {
+  morphPhase = 'transform';
+  morphTransformAnim = { start: clock.getElapsedTime() };
+  gameState.morphProgress.phaseTwoComplete = true;
+  saveGame();
+}
+
+function updateMorphTransform(t) {
+  if (!morphTransformAnim) return;
+  const age = t - morphTransformAnim.start;
+  const duration = 3.2;
+  if (age < duration) {
+    const p = age / duration;
+    const contract = p < 0.6 ? 1 - p * 0.5 : 0.7 + Math.sin((p - 0.6) * Math.PI * 3) * 0.3 * (1 - p);
+    morphCoreMesh.scale.setScalar(Math.max(0.05, contract));
+    morphAmbientParticles.material.opacity = 0.4 + Math.sin(p * Math.PI) * 0.4;
+    if (p > 0.55 && !morphTransformAnim.pulsed) {
+      morphTransformAnim.pulsed = true;
+      createMorphRipple(new THREE.Vector3(0, 0, 0), 1.4);
+      showCenterMessage('MORPH SEED');
+    }
+  } else {
+    morphCoreMesh.visible = false;
+    morphPhase = 'seed';
+    if (morphSeedGroup) {
+      morphSeedGroup.visible = true;
+      morphSeedGroup.scale.setScalar(1);
+    }
+    morphTransformAnim = null;
+  }
+}
+
+/* sections 31-33: an abstract, seemingly-alive object appears in its place */
+function createMorphSeed() {
+  morphSeedGroup = new THREE.Group();
+  morphSeedGroup.visible = false;
+
+  const geo = new THREE.OctahedronGeometry(0.4, 1);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, emissive: 0xd946ef, emissiveIntensity: 1.2,
+    metalness: 0.3, roughness: 0.25, flatShading: true,
+  });
+  const core = new THREE.Mesh(geo, mat);
+  morphSeedGroup.add(core);
+
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0xf0b8ff, transparent: true, opacity: 0.3,
+    side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  morphSeedGroup.add(new THREE.Mesh(new THREE.OctahedronGeometry(0.65, 1), glowMat));
+
+  morphSeedGroup.userData = { core, clicked: false, collected: false };
+  morphGroup.add(morphSeedGroup);
+}
+
+function updateMorphSeed(t) {
+  if (!morphSeedGroup || !morphSeedGroup.visible) return;
+  morphSeedGroup.rotation.y += 0.008;
+  morphSeedGroup.rotation.x += 0.003;
+  const wobble = 1 + Math.sin(t * 1.4) * 0.08;
+  morphSeedGroup.userData.core.scale.setScalar(hoveredMorphSeed ? wobble * 1.15 : wobble);
+}
+
+function clickMorphSeed() {
+  if (!morphSeedGroup.userData.clicked) {
+    morphSeedGroup.userData.clicked = true;
+    morphSeedGroup.userData.core.scale.setScalar(1.4); // it deforms itself, section 32
+    return;
+  }
+  collectMorphSeed();
+}
+
+/* sections 33-34 */
+function collectMorphSeed() {
+  if (morphSeedGroup.userData.collected) return;
+  morphSeedGroup.userData.collected = true;
+  const start = clock.getElapsedTime();
+  const from = morphSeedGroup.position.clone();
+  (function collectAnim() {
+    const age = clock.getElapsedTime() - start;
+    const p = Math.min(age / 1.0, 1);
+    morphSeedGroup.position.lerpVectors(from, new THREE.Vector3(0, 0, 3.5), p * 0.9);
+    morphSeedGroup.scale.setScalar(1 - p * 0.9);
+    if (p < 1) { requestAnimationFrame(collectAnim); return; }
+    morphSeedGroup.visible = false;
+    gameState.collectedMorphSeeds += 1;
+    gameState.morphProgress.seedCollected = true;
+    revealMorphReturnPortal();
+    showCenterMessage('MORPH SEED');
+    saveGame();
+  })();
+}
+
+function createMorphReturnPortalObject() {
+  morphReturnPortalGroup = new THREE.Group();
+  morphReturnPortalGroup.visible = false;
+  morphReturnPortalGroup.position.set(0, -2, 4);
+  morphGroup.add(morphReturnPortalGroup);
+
+  const ringGeo = new THREE.TorusGeometry(0.55, 0.03, 10, 48);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xd946ef, transparent: true, opacity: 0.4,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  morphReturnPortalGroup.add(ring);
+  morphReturnPortalGroup.userData.ring = ring;
+
+  const discGeo = new THREE.CircleGeometry(0.48, 32);
+  const discMat = new THREE.MeshBasicMaterial({
+    color: 0xf0b8ff, transparent: true, opacity: 0.18,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+  });
+  morphReturnPortalDisc = new THREE.Mesh(discGeo, discMat);
+  morphReturnPortalGroup.add(morphReturnPortalDisc);
+}
+
+function revealMorphReturnPortal() {
+  morphReturnPortalGroup.visible = true;
+}
+
+/* section 34 — the return portal is itself slightly deformable */
+function updateMorphReturnPortal(t) {
+  if (!morphReturnPortalGroup || !morphReturnPortalGroup.visible) return;
+  const wobble = hoveredMorphReturnPortal ? 1.15 + Math.sin(t * 4) * 0.05 : 1;
+  morphReturnPortalGroup.userData.ring.scale.set(wobble, 1 / wobble, 1);
+  morphReturnPortalDisc.material.opacity = 0.14 + Math.sin(t * 1.2) * 0.05;
+}
+
+/* ----------------------------------------------------------
+   MORPH — camera/UI setup, cleanup, per-frame dispatch, hover, drag
+---------------------------------------------------------- */
+function enterMorph() {
+  cameraRig.distance = CONFIG.morph.cameraStart;
+  cameraRig.targetDistance = CONFIG.morph.cameraStart;
+  document.getElementById('progress-index').textContent = 'MORPH';
+  document.getElementById('drag-hint').classList.add('hidden');
+  morphDragging = false;
+  morphDragPointLocal = null;
+  morphPointerInit = false;
+  if (!hasInteractedMorph) showMorphHintSequence();
+}
+
+function exitMorph() {
+  morphDragging = false;
+  morphDragPointLocal = null;
+  morphDragStartPoint = null;
+  hoveredMorphCore = false;
+  hoveredMorphSeed = false;
+  hoveredMorphReturnPortal = false;
+  morphHintTimers.forEach((tm) => clearTimeout(tm));
+  morphHintTimers = [];
+}
+
+/* a light restore helper (sections 44-45): the heavy per-vertex state is
+   intentionally not persisted, only the puzzle/phase milestones are —
+   so a reload just starts MORPH fresh visually while keeping progress */
+function resetMorph() {
+  morphPhase = 'core';
+  morphConnectedPairs.clear();
+  morphZoneEnergy = [0, 0, 0];
+  morphZoneConfigured = [false, false, false];
+}
+
+/* section 51: TOUCH -> PULL -> RELEASE, shown once, then never again */
+function showMorphHintSequence() {
+  hasInteractedMorph = true;
+  const hint = document.getElementById('drag-hint');
+  const steps = ['TOUCH', 'PULL', 'RELEASE'];
+  steps.forEach((word, i) => {
+    morphHintTimers.push(setTimeout(() => {
+      if (activeZone !== 'morph') return;
+      hint.textContent = word;
+      hint.classList.remove('hidden');
+    }, i * 1800));
+  });
+  morphHintTimers.push(setTimeout(() => {
+    if (activeZone === 'morph') hint.classList.add('hidden');
+  }, steps.length * 1800));
+}
+
+function updateMorphZone(t, delta) {
+  if (activeZone !== 'morph' && !zoneTransition) return;
+  if (!morphCoreMesh) return;
+
+  if (morphCoreMesh.visible) updateMorphPhysics(t, delta);
+  updateMorphTransform(t);
+  updateMorphSeed(t);
+  updateMorphReturnPortal(t);
+  morphAmbientParticles.rotation.y += 0.0006;
+
+  if (activeZone === 'morph') {
+    if (!morphPointerInit) { morphLastClientX = pointer.x; morphLastClientY = pointer.y; morphPointerInit = true; }
+    const dx = pointer.x - morphLastClientX, dy = pointer.y - morphLastClientY;
+    morphPointerSpeed = Math.sqrt(dx * dx + dy * dy);
+    morphLastClientX = pointer.x;
+    morphLastClientY = pointer.y;
+  }
+}
+
+function updateMorphHover() {
+  raycastPoint.set(pointer.normX, pointer.normY);
+  raycaster.setFromCamera(raycastPoint, camera);
+
+  const targets = [];
+  if (morphCoreMesh.visible) targets.push(morphCoreMesh);
+  if (morphSeedGroup.visible) targets.push(morphSeedGroup.userData.core);
+  if (morphReturnPortalGroup.visible) targets.push(morphReturnPortalDisc);
+
+  const intersects = raycaster.intersectObjects(targets, false);
+  const ring = document.getElementById('cursor-ring');
+
+  hoveredMorphCore = false;
+  hoveredMorphSeed = false;
+  hoveredMorphReturnPortal = false;
+  let hitPointLocal = null;
+
+  ring.classList.remove('morph-touch');
+  if (intersects.length > 0) {
+    const hit = intersects[0];
+    if (hit.object === morphCoreMesh) {
+      hoveredMorphCore = true;
+      hitPointLocal = morphCoreMesh.worldToLocal(hit.point.clone());
+      ring.classList.add('morph-touch');
+    } else if (morphSeedGroup.visible && hit.object === morphSeedGroup.userData.core) {
+      hoveredMorphSeed = true;
+      ring.classList.add('hover');
+    } else if (morphReturnPortalGroup.visible && hit.object === morphReturnPortalDisc) {
+      hoveredMorphReturnPortal = true;
+      ring.classList.add('hover');
+    }
+  } else {
+    ring.classList.remove('hover');
+  }
+  ring.classList.toggle('morph-pull', morphDragging);
+
+  // section 13 — the matter feels the cursor even without a click: project
+  // it onto a plane at the core's depth so there's almost always a point
+  if (!morphDragging && morphCoreMesh.visible) {
+    if (hitPointLocal) {
+      morphDragPointLocal = hitPointLocal;
+    } else {
+      const worldCenter = morphCoreMesh.getWorldPosition(new THREE.Vector3());
+      const depth = camera.position.distanceTo(worldCenter);
+      const worldPos = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(depth));
+      const localPos = morphCoreMesh.worldToLocal(worldPos);
+      morphDragPointLocal = localPos.length() < CONFIG.morph.coreRadius * 1.6
+        ? localPos.clone().setLength(CONFIG.morph.coreRadius)
+        : null;
+    }
+  }
+}
+
+function updateMorphDragPoint(clientX, clientY) {
+  raycastPoint.set(
+    (clientX / window.innerWidth) * 2 - 1,
+    -(clientY / window.innerHeight) * 2 + 1
+  );
+  raycaster.setFromCamera(raycastPoint, camera);
+  const worldCenter = morphCoreMesh.getWorldPosition(new THREE.Vector3());
+  const depth = camera.position.distanceTo(worldCenter);
+  const worldPos = raycaster.ray.origin.clone().add(raycaster.ray.direction.clone().multiplyScalar(depth));
+  const localPos = morphCoreMesh.worldToLocal(worldPos);
+  morphDragPointLocal = localPos.length() > 0.01
+    ? localPos.clone().setLength(CONFIG.morph.coreRadius * 1.05)
+    : localPos;
+}
+
+function startMorphDrag(clientX, clientY) {
+  morphDragging = true;
+  updateMorphDragPoint(clientX, clientY);
+  morphDragStartPoint = morphDragPointLocal ? morphDragPointLocal.clone() : null;
+  registerFirstInteractionMorph();
+}
+
+/* section 9-10: drag pulls the matter; releasing lets it spring back,
+   and also feeds the section-42 secret gesture recognizer */
+function endMorphDrag(clientX, clientY) {
+  if (!morphDragging) return;
+  updateMorphDragPoint(clientX, clientY);
+  const start = morphDragStartPoint;
+  const end = morphDragPointLocal;
+  morphDragging = false;
+  morphDragStartPoint = null;
+  if (start && end) {
+    const dir = end.clone().sub(start);
+    const mag = dir.length();
+    if (mag > 0.05) {
+      dir.normalize();
+      logMorphGesture(dir, mag);
+      createMorphRipple(end.clone(), Math.min(mag, 2));
+    }
+  }
+}
+
+function registerFirstInteractionMorph() {
+  hasInteractedMorph = true;
+}
+
+/* section 42 — an obscure gesture: pull, release, pull the other way,
+   wait, then a strong quick pull (the "push") */
+function logMorphGesture(dir, mag) {
+  morphGestureLog.push({ dir, mag, t: clock.getElapsedTime() });
+  if (morphGestureLog.length > 6) morphGestureLog.shift();
+  checkMorphSecretPattern();
+}
+
+function checkMorphSecretPattern() {
+  if (gameState.secretsFound.includes('morph_hidden_form')) return;
+  if (morphGestureLog.length < 3) return;
+  const a = morphGestureLog[morphGestureLog.length - 3];
+  const b = morphGestureLog[morphGestureLog.length - 2];
+  const c = morphGestureLog[morphGestureLog.length - 1];
+  const opposite = a.dir.dot(b.dir) < -0.3;
+  const waited = (c.t - b.t) > 0.8;
+  const strongPush = c.mag > 1.0;
+  if (opposite && waited && strongPush) {
+    triggerMorphSecret();
+  }
+}
+
+function triggerMorphSecret() {
+  gameState.secretsFound.push('morph_hidden_form');
+  morphSecretActive = { start: clock.getElapsedTime() };
+  showCenterMessage('· · ·');
+  saveGame();
 }
 
 /* ----------------------------------------------------------
@@ -2784,6 +4472,18 @@ function saveGame() {
       gravityLockedRings: gravityOrbitRings
         .map((r, i) => (r.userData.occupied ? i : null))
         .filter((i) => i !== null),
+      // V5
+      voidUnlocked: gameState.voidUnlocked || voidTeaserSpawned,
+      voidAnomaliesFound: gameState.voidAnomaliesFound,
+      collectedVoidShards: gameState.collectedVoidShards,
+      voidStructureRevealed: gameState.voidStructureRevealed,
+      voidStructureActivated: gameState.voidStructureActivated,
+      fissureRevealed: gameState.fissureRevealed,
+      // V6
+      collectedMorphSeeds: gameState.collectedMorphSeeds,
+      morphProgress: gameState.morphProgress,
+      planetFissureSpawned: gameState.planetFissureSpawned,
+      convergenceTriggered: gameState.convergenceTriggered,
     }));
   } catch (e) {
     /* localStorage unavailable — progress just won't persist */
@@ -2904,6 +4604,53 @@ function applyLoadedState(saved) {
     gravityReturnPortalGroup.visible = true;
   }
 
+  // V5 restoration — defensive defaults so a pre-V5 save never breaks (section 41)
+  if (!saved.voidAnomaliesFound) saved.voidAnomaliesFound = [];
+  if (!saved.collectedVoidShards) saved.collectedVoidShards = 0;
+  gameState.voidAnomaliesFound = saved.voidAnomaliesFound;
+  gameState.voidUnlocked = !!saved.voidUnlocked;
+  (saved.voidAnomaliesFound || []).forEach((id) => {
+    const a = voidAnomalies.find((x) => x.id === id);
+    if (a) a.found = true;
+  });
+  if (saved.voidStructureRevealed) {
+    gameState.voidStructureRevealed = true;
+    voidStructureGroup.visible = true;
+    voidStructureGroup.scale.setScalar(1);
+    voidStructureRings.forEach((r) => (r.material.opacity = 0.5));
+    voidStructureCore.material.opacity = 0.9;
+    if (voidFarStars) voidFarStars.material.opacity = 0.12;
+  }
+  if (saved.voidStructureActivated) {
+    gameState.voidStructureActivated = true;
+    voidStructureCore.scale.setScalar(7);
+  }
+  if (saved.collectedVoidShards >= 1) {
+    gameState.collectedVoidShards = saved.collectedVoidShards;
+    if (gameState.voidStructureActivated) revealVoidReturnPortal();
+    spawnHubVoidShardObject();
+  } else if (saved.voidStructureActivated) {
+    spawnVoidShard();
+  }
+
+  // V6 restoration — defensive defaults so a pre-V6 save never breaks (section 45)
+  if (!saved.morphProgress) saved.morphProgress = {};
+  gameState.morphProgress = saved.morphProgress;
+  resetMorph(); // heavy per-vertex state isn't persisted — start MORPH fresh visually
+  if (!saved.collectedMorphSeeds) saved.collectedMorphSeeds = 0;
+  if (saved.collectedMorphSeeds >= 1) {
+    gameState.collectedMorphSeeds = saved.collectedMorphSeeds;
+    spawnHubMorphSeedObject();
+  }
+  if (saved.planetFissureSpawned) {
+    gameState.planetFissureSpawned = true;
+    createPlanetFissure();
+  }
+  if (saved.convergenceTriggered) {
+    gameState.convergenceTriggered = true;
+  }
+  checkRelicConvergence();
+
   // always resume in the hub — simplest and safest starting point
   enterZone('hub');
 }
@@ -2945,6 +4692,8 @@ let hoveredMicroSymbol = false;
 function getRotationTarget() {
   if (activeZone === 'constellation') return constellationGroup;
   if (activeZone === 'gravity') return gravityGroup;
+  if (activeZone === 'void') return voidGroup;
+  if (activeZone === 'morph') return morphGroup;
   return worldGroup;
 }
 
@@ -2974,6 +4723,9 @@ function setupPointerEvents() {
       draggedNucleus.getWorldPosition(worldPos);
       updateCursorFieldWorld(e.clientX, e.clientY, camera.position.distanceTo(worldPos));
       secretDrag.shiftAtStart = shiftHeld;
+    } else if (activeZone === 'morph' && hoveredMorphCore) {
+      interactionMode = 'morph-drag';
+      startMorphDrag(e.clientX, e.clientY);
     } else if (activeZone === 'hub' && hoveredShard) {
       interactionMode = 'drag-shard';
       shardMesh.userData.carried = true;
@@ -3027,6 +4779,8 @@ function setupPointerEvents() {
       updateCursorFieldWorld(e.clientX, e.clientY, camera.position.distanceTo(worldPos));
       updateGravitySecretWatch();
       registerFirstInteraction();
+    } else if (interactionMode === 'morph-drag') {
+      updateMorphDragPoint(e.clientX, e.clientY);
     }
   });
 
@@ -3040,6 +4794,8 @@ function setupPointerEvents() {
     } else if (interactionMode === 'gravity-drag') {
       checkSecretRelease();
       draggedNucleus = null;
+    } else if (interactionMode === 'morph-drag') {
+      endMorphDrag(e.clientX, e.clientY);
     }
     document.getElementById('cursor-ring').classList.remove('connecting');
     interactionMode = null;
@@ -3051,6 +4807,7 @@ function setupPointerEvents() {
     if (interactionMode === 'charge') cancelCharge();
     if (interactionMode === 'connect') rejectConnection();
     if (interactionMode === 'gravity-drag') draggedNucleus = null;
+    if (interactionMode === 'morph-drag') { morphDragging = false; morphDragStartPoint = null; }
     drag.active = false;
   });
 
@@ -3077,11 +4834,13 @@ function setupPointerEvents() {
     'wheel',
     (e) => {
       e.preventDefault();
+      const [zMin, zMax] = getZoomClampRange();
       cameraRig.targetDistance = THREE.MathUtils.clamp(
         cameraRig.targetDistance + e.deltaY * CONFIG.camera.zoomStep * cameraRig.targetDistance,
-        CONFIG.camera.minDistance,
-        CONFIG.camera.maxDistance
+        zMin,
+        zMax
       );
+      if (activeZone === 'void') registerFirstInteractionVoid();
       registerFirstInteraction();
     },
     { passive: false }
@@ -3099,12 +4858,14 @@ function setupPointerEvents() {
     if (e.touches.length === 2 && pinchStartDist) {
       const dist = touchDistance(e.touches);
       const delta = pinchStartDist - dist;
+      const [zMin, zMax] = getZoomClampRange();
       cameraRig.targetDistance = THREE.MathUtils.clamp(
-        cameraRig.targetDistance + delta * 0.03,
-        CONFIG.camera.minDistance,
-        CONFIG.camera.maxDistance
+        cameraRig.targetDistance + delta * 0.03 * (activeZone === 'void' ? 6 : 1),
+        zMin,
+        zMax
       );
       pinchStartDist = dist;
+      if (activeZone === 'void') registerFirstInteractionVoid();
       registerFirstInteraction();
     }
   }, { passive: true });
@@ -3223,10 +4984,15 @@ function onResize() {
 ============================================================ */
 function updateHover() {
   if (zoneTransition) return;
+  if (activeZone !== 'hub') document.getElementById('cursor-ring').classList.remove('void-hover');
   if (activeZone === 'constellation') {
     updateConstellationHover();
   } else if (activeZone === 'gravity') {
     updateGravityHover();
+  } else if (activeZone === 'void') {
+    updateVoidHover();
+  } else if (activeZone === 'morph') {
+    updateMorphHover();
   } else {
     updateHubHover();
   }
@@ -3284,6 +5050,10 @@ function updateHubHover() {
   } else {
     ring.classList.remove('hover');
   }
+  // V5 — the void sphere darkens the cursor instead of brightening it (section 3)
+  const onVoidSphere = hoveredOrbital === voidSphereObj;
+  ring.classList.toggle('void-hover', onVoidSphere);
+  if (onVoidSphere) ring.classList.remove('hover');
 }
 
 /* V3 — hover for the constellation zone: points, the core reward, the return portal */
@@ -3441,6 +5211,34 @@ function handleClick(clientX, clientY) {
     } else if (hoveredGravityReturnPortal) {
       triggerZoneTransition('hub', gravityReturnPortalGroup, gravityReturnPortalDisc.material);
     }
+    return;
+  }
+
+  if (activeZone === 'void') {
+    if (hoveredVoidStructureCore) {
+      activateVoidStructure();
+    } else if (hoveredVoidShard) {
+      collectVoidShard();
+    } else if (hoveredVoidReturnPortal) {
+      triggerZoneTransition('hub', voidReturnPortalGroup, voidReturnPortalDisc.material);
+    }
+    registerFirstInteractionVoid();
+    return;
+  }
+
+  if (activeZone === 'morph') {
+    if (hoveredMorphSeed) {
+      clickMorphSeed();
+    } else if (hoveredMorphReturnPortal) {
+      triggerZoneTransition('hub', morphReturnPortalGroup, morphReturnPortalDisc.material);
+    }
+    registerFirstInteractionMorph();
+    return;
+  }
+
+  if (hoveredOrbital && hoveredOrbital.userData.name === 'void') {
+    handleVoidSphereClick();
+    registerFirstInteraction();
     return;
   }
 
@@ -3630,6 +5428,13 @@ function update(t, delta) {
         -1.1,
         1.1
       );
+    } else if (activeZone === 'void') {
+      voidGroup.rotation.y += drag.velX * 0.6;
+      voidGroup.rotation.x = THREE.MathUtils.clamp(
+        voidGroup.rotation.x + drag.velY * 0.6,
+        -0.8,
+        0.8
+      );
     }
   }
 
@@ -3724,6 +5529,16 @@ function update(t, delta) {
 
   // V4 systems
   updateGravityZone(t, delta);
+
+  // V5 systems
+  updateVoidSphereCharge(t);
+  updateVoidZone(t, delta);
+
+  // V6 systems
+  updateMorphZone(t, delta);
+  updateHubFissure(t);
+  updatePlanetFissure(t);
+  updateHubConvergencePeek(t);
 
   updateHover();
 }
@@ -3858,6 +5673,10 @@ function init() {
   createConstellationZone();
   // V4 — the gravity zone (also built eagerly, same reasoning)
   createGravityZone();
+  // V5 — the void zone (also built eagerly, same reasoning)
+  createVoidZone();
+  // V6 — the morph zone (also built eagerly, same reasoning)
+  createMorphZone();
   setupPointerEvents();
   applyLoadedState(loadGame());
   animate();
