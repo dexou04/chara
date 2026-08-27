@@ -8662,21 +8662,82 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
-const controls = new THREE.OrbitControls(camera, renderer.domElement);
-// On vise tout de suite le point d'apparition du chat (CAT_SPAWN plus bas)
-// pour démarrer déjà cadré serré dessus, plutôt que sur l'origine de la scène.
-controls.target.set(0, 2, 4);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-// Distance resserrée : on reste zoomé près du chat en permanence. L'utilisateur
-// garde un peu de marge de zoom (molette) mais ne peut plus s'en éloigner
-// comme avant (l'ancien maxDistance de 60 donnait la vue très large du départ).
-controls.minDistance = 1.6;
-controls.maxDistance = 5.5;
-controls.maxPolarAngle = Math.PI * 0.53;
-controls.enabled = true; // orbite (glisser) et zoom (molette) actifs, comme indiqué dans le HUD ;
-// la cible ("target") est recalée en continu sur le chat plus bas (voir controls.target.lerp),
-// donc la caméra le suit automatiquement dans ses déplacements tout en restant zoomée.
+/* ---------- Caméra 3ème personne façon GTA V ----------
+   Ancrée derrière le chat en permanence : quand le chat tourne (Q/D), la
+   caméra tourne avec lui pour rester dans son dos. La souris permet en plus
+   d'orbiter librement autour du chat (regarder ailleurs sans le faire
+   tourner), et se recentre automatiquement derrière lui dès qu'on relâche
+   le clic. La molette règle la distance de zoom. */
+const CAM = {
+  distance: 3.4,        // distance actuelle caméra <-> chat (molette)
+  minDistance: 1.8,
+  maxDistance: 6.5,
+  baseHeight: 1.15,      // hauteur de la caméra au-dessus du sol du chat
+  lookHeight: 0.85,      // hauteur du point visé, au-dessus du chat
+  yawOffset: 0,          // décalage libre (souris) par rapport à "pile derrière"
+  pitch: 0.34,           // inclinaison verticale (souris), en radians
+  minPitch: -0.05,
+  maxPitch: 1.05,
+  yawSensitivity: 0.0055,
+  pitchSensitivity: 0.0045,
+  recenterSpeed: 1.4,    // vitesse de recentrage du yaw quand on ne touche plus la souris
+};
+
+let camDragging = false;
+let camLastX = 0, camLastY = 0;
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  camDragging = true;
+  camLastX = e.clientX; camLastY = e.clientY;
+  renderer.domElement.setPointerCapture(e.pointerId);
+});
+window.addEventListener('pointermove', (e) => {
+  if (!camDragging) return;
+  const dx = e.clientX - camLastX;
+  const dy = e.clientY - camLastY;
+  camLastX = e.clientX; camLastY = e.clientY;
+  CAM.yawOffset -= dx * CAM.yawSensitivity;
+  CAM.pitch = Math.min(CAM.maxPitch, Math.max(CAM.minPitch, CAM.pitch + dy * CAM.pitchSensitivity));
+});
+window.addEventListener('pointerup', () => { camDragging = false; });
+window.addEventListener('pointercancel', () => { camDragging = false; });
+renderer.domElement.addEventListener('wheel', (e) => {
+  CAM.distance = Math.min(CAM.maxDistance, Math.max(CAM.minDistance, CAM.distance + e.deltaY * 0.0035));
+}, { passive: true });
+
+// Position/visée initiales, avant même le chargement du chat (au niveau du
+// point d'apparition CAT_SPAWN défini plus bas).
+camera.lookAt(0, 1.85, 4);
+
+function updateChaseCamera(delta) {
+  if (!catGroup) return;
+
+  // Quand on ne fait pas glisser la souris, le regard se recentre en douceur
+  // pile derrière le chat.
+  if (!camDragging && CAM.yawOffset !== 0) {
+    const relax = Math.min(1, CAM.recenterSpeed * delta);
+    CAM.yawOffset += (0 - CAM.yawOffset) * relax;
+    if (Math.abs(CAM.yawOffset) < 0.001) CAM.yawOffset = 0;
+  }
+
+  // "Derrière" = opposé de la direction où regarde le chat (voir le vecteur
+  // "dir" utilisé pour le déplacement plus bas : forward = sin(rotY), cos(rotY)).
+  const behindAngle = catGroup.rotation.y + Math.PI + CAM.yawOffset;
+  const horiz = CAM.distance * Math.cos(CAM.pitch);
+  const vert = CAM.distance * Math.sin(CAM.pitch);
+
+  const desired = new THREE.Vector3(
+    catGroup.position.x + horiz * Math.sin(behindAngle),
+    catGroup.position.y + CAM.baseHeight + vert,
+    catGroup.position.z + horiz * Math.cos(behindAngle)
+  );
+
+  // Suivi lissé, indépendant du framerate.
+  const followSmoothing = 1 - Math.exp(-delta * 9);
+  camera.position.lerp(desired, followSmoothing);
+
+  const lookAt = new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAM.lookHeight, catGroup.position.z);
+  camera.lookAt(lookAt);
+}
 
 /* ---------- Lighting: palette bleu nuit / cyan / rose néon ---------- */
 const ambient = new THREE.AmbientLight(0x1a1f3d, 0.9);
@@ -8859,7 +8920,8 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
       if (catMixer) catMixer.update(delta);
 
       // La caméra orbite en continu autour du chat qui se déplace
-      controls.target.lerp(new THREE.Vector3(catGroup.position.x, catGroup.position.y + 1, catGroup.position.z), 0.08);
+      // La caméra reste ancrée dans le dos du chat et pivote avec lui.
+      updateChaseCamera(delta);
     }
   });
 
@@ -8950,7 +9012,6 @@ function tick() {
   for (const a of animatables) a.update(t, delta);
   blueFill.intensity = 5 + Math.sin(t * 1.1) * 1.2;
   cyanRim.intensity = 3.5 + Math.sin(t * 1.4 + 1) * 1.0;
-  controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }
