@@ -8676,11 +8676,8 @@ const CAM = {
   lookHeight: 0.55,      // hauteur du point visé, au-dessus du chat (plus bas
                          // = le chat remonte à l'écran, plus proche du centre
                          // haut du cadre au lieu du bas)
-  lookAhead: 2.4,        // distance en avant du chat visée par la caméra : on
-                         // regarde devant lui (le décor à venir), pas juste
-                         // son dos — vraie caméra "3e personne" façon GTA.
   yawOffset: 0,          // décalage libre (souris) par rapport à "pile derrière"
-  pitch: 0.20,           // inclinaison verticale (souris), en radians
+  pitch: 0.16,           // inclinaison verticale (souris), en radians
   minPitch: -0.05,
   maxPitch: 1.05,
   yawSensitivity: 0.0055,
@@ -8753,7 +8750,7 @@ renderer.domElement.addEventListener('wheel', (e) => {
 
 // Position/visée initiales, avant même le chargement du chat (au niveau du
 // point d'apparition CAT_SPAWN défini plus bas).
-camera.lookAt(0, 1.55, 6.4);
+camera.lookAt(0, 1.55, 4);
 
 function updateChaseCamera(delta) {
   if (!catGroup) return;
@@ -8778,31 +8775,22 @@ function updateChaseCamera(delta) {
     catGroup.position.z + horiz * Math.cos(behindAngle)
   );
 
-  const lookAt = new THREE.Vector3(
-    catGroup.position.x + Math.sin(catGroup.rotation.y) * CAM.lookAhead,
-    catGroup.position.y + CAM.lookHeight,
-    catGroup.position.z + Math.cos(catGroup.rotation.y) * CAM.lookAhead
-  );
-  // Point de référence pour la collision caméra <-> bâtiments : toujours le
-  // chat lui-même (et non le point visé, qui est devant lui) — sinon le test
-  // se ferait depuis un point déjà potentiellement dans un mur/à l'intérieur
-  // d'un bâtiment plus loin.
-  const catAnchor = new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAM.lookHeight, catGroup.position.z);
+  const lookAt = new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAM.lookHeight, catGroup.position.z);
 
   // Collision caméra contre les bâtiments : on teste plusieurs rayons du
-  // chat vers la position voulue de la caméra. Si un mur/toit est touché
-  // avant, on rapproche la caméra juste devant l'obstacle — comme ça elle ne
-  // traverse jamais un bâtiment et on ne voit jamais à l'intérieur, même en
-  // coupant un coin de mur ou un débord de toit.
+  // point visé (le chat) vers la position voulue de la caméra. Si un
+  // mur/toit est touché avant, on rapproche la caméra juste devant
+  // l'obstacle — comme ça elle ne traverse jamais un bâtiment et on ne voit
+  // jamais à l'intérieur, même en coupant un coin de mur ou un débord de toit.
   let finalDesired = desired;
-  _camDir.subVectors(desired, catAnchor);
+  _camDir.subVectors(desired, lookAt);
   const fullDist = _camDir.length();
   if (fullDist > 0.0001) {
     _camDir.normalize();
-    const freeDist = cameraFreeDistance(catAnchor, _camDir, fullDist);
+    const freeDist = cameraFreeDistance(lookAt, _camDir, fullDist);
     if (freeDist < fullDist) {
       const safeDist = Math.max(CAM_MIN_DIST_FROM_LOOK, freeDist - CAM_COLLISION_MARGIN);
-      finalDesired = catAnchor.clone().addScaledVector(_camDir, safeDist);
+      finalDesired = lookAt.clone().addScaledVector(_camDir, safeDist);
     }
   }
 
