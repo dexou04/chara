@@ -8639,7 +8639,7 @@ version 0.6.9
 const PATHS = {
   catGlb:       'assets/cat.glb',
   cribFbx:      'assets/Crib.fbx',
-  cloudsFbx:    'assets/Stylized_Clouds_Pack_-_Vol_09.fbx',
+  cloudsFbx:    'assets/Stylized Clouds Pack - Vol 09.fbx',
   cribAlbedo:   'textures/Crib_texture_albedo.png',
   cribEmission: 'textures/Crib_emission.png',
 };
@@ -8771,6 +8771,7 @@ const cribManager = new THREE.LoadingManager();
 cribManager.setURLModifier((url) => {
   const lower = url.toLowerCase();
   if (lower.startsWith('data:') || lower.startsWith('blob:')) return url;
+  if (lower.endsWith('.fbx')) return url; // ne pas intercepter le chargement du .fbx lui-même
   if (lower.includes('emiss') || lower.includes('_e.png') || lower.includes('texture_e')) {
     return PATHS.cribEmission;
   }
