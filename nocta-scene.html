@@ -39,7 +39,7 @@
 <body>
 <div id="app">
   <div id="loading"><div>Initialisation de la scène…</div><div class="bar"><div id="loadbar"></div></div></div>
-  <div id="hud"><b>NOCTA — scène 3D</b><br/>Glisser : orbiter la caméra<br/>Molette : zoom<br/>Clic droit + glisser : déplacer</div>
+  <div id="hud"><b>NOCTA — scène 3D</b><br/>ZQSD : déplacer le chat<br/>Glisser : orbiter la caméra<br/>Molette : zoom</div>
   <div id="err"></div>
 </div>
 
@@ -8628,11 +8628,11 @@ version 0.6.9
 
      ./assets/Crib.fbx
      ./assets/Stylized_Clouds_Pack_-_Vol_09.fbx
-     ./assets/tuxedo_cat_animated_2.0.glb
+     ./assets/cat.glb
      ./textures/Crib_texture_albedo.png
      ./textures/Crib_emission.png
 
-   (tuxedo_cat_animated_2.0.glb embarque déjà ses propres textures, pas besoin de
+   (cat.glb embarque déjà ses propres textures, pas besoin de
    fichier séparé pour lui.)
    ========================================================= */
 
@@ -8726,8 +8726,35 @@ function showError(msg) {
 const animatables = [];
 const mouse = { x: 0, y: 0 };
 
-/* ---------- Load: CAT (glb, squelette animé — IdleNorm/WalkCycle/IdleTailSwoosh/SitDown/IdleSit/StandUp) ---------- */
+/* ---------- Load: CAT (glb, squelette animé — IdleNorm/WalkCycle/IdleTailSwoosh/SitDown/IdleSit/StandUp)
+   Contrôlable au clavier en ZQSD (Z=avancer, S=reculer, Q=tourner à gauche,
+   D=tourner à droite). On lit les touches via e.code (KeyW/KeyA/KeyS/KeyD) —
+   ce sont les positions PHYSIQUES des touches, identiques sur QWERTY et
+   AZERTY ; sur un clavier français ça correspond bien à Z/Q/S/D. ---------- */
 let catMixer = null;
+let catGroup = null;
+let idleAction = null, walkAction = null;
+const CAT_MOVE_SPEED = 2.2;   // unités/seconde
+const CAT_TURN_SPEED = 2.6;   // radians/seconde
+// Point d'apparition estimé (zone entourée à l'avant-gauche du bâtiment).
+// À ajuster toi-même si besoin en regardant la scène en direct — je n'ai
+// pas de moyen de vérifier les coordonnées exactes du modèle depuis une capture.
+const CAT_SPAWN = { x: -2.4, z: 3.6 };
+
+const keys = { forward: false, backward: false, left: false, right: false };
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyW') keys.forward = true;
+  if (e.code === 'KeyS') keys.backward = true;
+  if (e.code === 'KeyA') keys.left = true;
+  if (e.code === 'KeyD') keys.right = true;
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyW') keys.forward = false;
+  if (e.code === 'KeyS') keys.backward = false;
+  if (e.code === 'KeyA') keys.left = false;
+  if (e.code === 'KeyD') keys.right = false;
+});
+
 const gltfLoader = new THREE.GLTFLoader();
 gltfLoader.load(PATHS.catGlb, (gltf) => {
   const catRoot = gltf.scene;
@@ -8748,41 +8775,59 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
   const box2 = new THREE.Box3().setFromObject(catRoot);
   const center2 = new THREE.Vector3(); box2.getCenter(center2);
   const min2 = box2.min;
-  catRoot.position.set(1.6 - center2.x, -min2.y, 1.1 - center2.z);
+  catRoot.position.set(-center2.x, -min2.y, -center2.z);
 
-  const catGroup = new THREE.Group();
+  catGroup = new THREE.Group();
   catGroup.add(catRoot);
+  catGroup.position.set(CAT_SPAWN.x, 0, CAT_SPAWN.z);
   scene.add(catGroup);
 
-  // Lecture de l'animation d'idle du rig via AnimationMixer
   if (gltf.animations && gltf.animations.length) {
     catMixer = new THREE.AnimationMixer(catRoot);
     const idleClip = gltf.animations.find(c => c.name === 'IdleNorm') || gltf.animations[0];
-    const idleAction = catMixer.clipAction(idleClip);
+    const walkClip = gltf.animations.find(c => c.name === 'WalkCycle');
+    idleAction = catMixer.clipAction(idleClip);
     idleAction.play();
-
-    // De temps en temps, un petit "tail swoosh" pour casser la boucle d'idle
-    const swooshClip = gltf.animations.find(c => c.name === 'IdleTailSwoosh');
-    if (swooshClip) {
-      const swooshAction = catMixer.clipAction(swooshClip);
-      swooshAction.setLoop(THREE.LoopOnce);
-      swooshAction.clampWhenFinished = true;
-      setInterval(() => {
-        swooshAction.reset().play();
-        idleAction.crossFadeTo(swooshAction, 0.3, false);
-      }, 8000 + Math.random() * 4000);
+    if (walkClip) {
+      walkAction = catMixer.clipAction(walkClip);
     }
   }
 
+  let wasMoving = false;
   animatables.push({
     update(t, delta) {
+      const turning = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+      const moving = (keys.forward ? 1 : 0) - (keys.backward ? 1 : 0);
+
+      if (turning) catGroup.rotation.y += turning * CAT_TURN_SPEED * delta;
+      if (moving) {
+        const dir = new THREE.Vector3(Math.sin(catGroup.rotation.y), 0, Math.cos(catGroup.rotation.y));
+        catGroup.position.addScaledVector(dir, moving * CAT_MOVE_SPEED * delta);
+      }
+
+      // Bascule idle <-> marche selon le déplacement
+      const isMoving = !!moving;
+      if (isMoving !== wasMoving && catMixer && idleAction) {
+        if (isMoving && walkAction) {
+          walkAction.reset().play();
+          idleAction.crossFadeTo(walkAction, 0.2, false);
+        } else if (walkAction) {
+          idleAction.reset().play();
+          walkAction.crossFadeTo(idleAction, 0.2, false);
+        }
+        wasMoving = isMoving;
+      }
       if (catMixer) catMixer.update(delta);
-      catGroup.rotation.y = Math.sin(t * 0.35) * 0.35 + mouse.x * 0.25;
+
+      // La caméra orbite en continu autour du chat qui se déplace
+      controls.target.lerp(new THREE.Vector3(catGroup.position.x, catGroup.position.y + 1, catGroup.position.z), 0.08);
     }
   });
 
   bumpLoaded();
 }, undefined, (err) => { showError('Impossible de charger ' + PATHS.catGlb + ' — vérifie l\'arborescence de dossiers.'); bumpLoaded(); });
+
+
 
 /* ---------- Load: CRIB (fbx, environnement complet ~8m, 115 meshes) ----------
    Analyse : ce fichier n'est pas un simple accessoire mais une scène/pièce
