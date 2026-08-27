@@ -8683,6 +8683,12 @@ const CAM = {
   recenterSpeed: 1.4,    // vitesse de recentrage du yaw quand on ne touche plus la souris
 };
 
+// Rayon utilisé chaque frame pour vérifier qu'aucun bâtiment ne se trouve
+// entre le chat et la caméra (voir updateChaseCamera plus bas).
+const camCollisionRay = new THREE.Raycaster();
+const CAM_COLLISION_MARGIN = 0.25;   // marge gardée devant le mur touché
+const CAM_MIN_DIST_FROM_LOOK = 0.35; // distance mini caméra <-> point visé
+
 let camDragging = false;
 let camLastX = 0, camLastY = 0;
 renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -8731,11 +8737,30 @@ function updateChaseCamera(delta) {
     catGroup.position.z + horiz * Math.cos(behindAngle)
   );
 
+  const lookAt = new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAM.lookHeight, catGroup.position.z);
+
+  // Collision caméra contre les bâtiments : on lance un rayon du point visé
+  // (le chat) vers la position voulue de la caméra. Si un mur/toit est
+  // touché avant, on rapproche la caméra juste devant l'obstacle — comme ça
+  // elle ne traverse jamais un bâtiment et on ne voit jamais à l'intérieur.
+  let finalDesired = desired;
+  const toCam = new THREE.Vector3().subVectors(desired, lookAt);
+  const fullDist = toCam.length();
+  if (fullDist > 0.0001 && cameraObstacles.length) {
+    const dir = toCam.clone().normalize();
+    camCollisionRay.set(lookAt, dir);
+    camCollisionRay.far = fullDist;
+    const hits = camCollisionRay.intersectObjects(cameraObstacles, true);
+    if (hits.length) {
+      const safeDist = Math.max(CAM_MIN_DIST_FROM_LOOK, hits[0].distance - CAM_COLLISION_MARGIN);
+      finalDesired = lookAt.clone().addScaledVector(dir, safeDist);
+    }
+  }
+
   // Suivi lissé, indépendant du framerate.
   const followSmoothing = 1 - Math.exp(-delta * 9);
-  camera.position.lerp(desired, followSmoothing);
+  camera.position.lerp(finalDesired, followSmoothing);
 
-  const lookAt = new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAM.lookHeight, catGroup.position.z);
   camera.lookAt(lookAt);
 }
 
@@ -8775,6 +8800,11 @@ scene.add(ground);
 
 // Objets sur lesquels le chat peut marcher/grimper (sol + bâtiment une fois chargé)
 const collidables = [ground];
+
+// Objets "solides" qui bloquent la caméra (murs, façades, toits du bâtiment
+// une fois chargé) : si la ligne chat -> caméra traverse l'un de ces meshes,
+// on rapproche la caméra pour ne jamais voir à travers les murs.
+const cameraObstacles = [];
 
 const gridHelper = new THREE.GridHelper(30, 30, 0x2a3466, 0x141a33);
 gridHelper.position.y = 0.01;
@@ -8957,7 +8987,13 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
         }
         m.needsUpdate = true;
       });
-      if (o.name && WALKABLE_NAME_RE.test(o.name)) walkableMeshes.push(o);
+      if (o.name && WALKABLE_NAME_RE.test(o.name)) {
+        walkableMeshes.push(o);
+      } else {
+        // Tout le reste (murs, façades, toits, piliers...) sert d'obstacle
+        // pour la caméra, pour ne jamais voir à l'intérieur des bâtiments.
+        cameraObstacles.push(o);
+      }
     }
   });
 
