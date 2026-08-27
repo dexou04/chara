@@ -8776,7 +8776,7 @@ gltfLoader.load(PATHS.catGlb, (gltf) => {
 }, undefined, (err) => { showError('Impossible de charger ' + PATHS.catGlb + ' — vérifie l\'arborescence de dossiers.'); bumpLoaded(); });
 
 /* ---------- Load: CRIB (fbx + textures) ---------- */
-const fbxLoader = new THREE.FBXLoader(textureManager);
+const fbxLoader = new THREE.FBXLoader();
 let cribEmissiveMats = [];
 fbxLoader.load(PATHS.cribFbx, (fbx) => {
   fbx.traverse((o) => {
