@@ -8672,10 +8672,12 @@ const CAM = {
   distance: 3.4,        // distance actuelle caméra <-> chat (molette)
   minDistance: 1.8,
   maxDistance: 6.5,
-  baseHeight: 1.15,      // hauteur de la caméra au-dessus du sol du chat
-  lookHeight: 0.85,      // hauteur du point visé, au-dessus du chat
+  baseHeight: 1.25,      // hauteur de la caméra au-dessus du sol du chat
+  lookHeight: 0.42,      // hauteur du point visé, au-dessus du chat (plus bas
+                         // = le chat remonte à l'écran, plus proche du centre
+                         // haut du cadre au lieu du bas)
   yawOffset: 0,          // décalage libre (souris) par rapport à "pile derrière"
-  pitch: 0.34,           // inclinaison verticale (souris), en radians
+  pitch: 0.30,           // inclinaison verticale (souris), en radians
   minPitch: -0.05,
   maxPitch: 1.05,
   yawSensitivity: 0.0055,
@@ -8683,11 +8685,47 @@ const CAM = {
   recenterSpeed: 1.4,    // vitesse de recentrage du yaw quand on ne touche plus la souris
 };
 
-// Rayon utilisé chaque frame pour vérifier qu'aucun bâtiment ne se trouve
-// entre le chat et la caméra (voir updateChaseCamera plus bas).
+// Rayons utilisés chaque frame pour vérifier qu'aucun bâtiment ne se trouve
+// entre le chat et la caméra (voir updateChaseCamera plus bas). On teste
+// plusieurs rayons en parallèle (pas juste le centre) pour ne pas rater un
+// coin de mur ou un débord de toit que le rayon central aurait pu longer.
 const camCollisionRay = new THREE.Raycaster();
-const CAM_COLLISION_MARGIN = 0.25;   // marge gardée devant le mur touché
-const CAM_MIN_DIST_FROM_LOOK = 0.35; // distance mini caméra <-> point visé
+const CAM_COLLISION_MARGIN = 0.3;    // marge gardée devant le mur touché
+const CAM_MIN_DIST_FROM_LOOK = 0.5;  // distance mini caméra <-> point visé
+const CAM_PROBE_RADIUS_H = 0.24;     // écart latéral des rayons secondaires
+const CAM_PROBE_RADIUS_V = 0.18;     // écart vertical des rayons secondaires
+const CAM_PROBE_OFFSETS = [
+  [0, 0], [1, 0], [-1, 0], [0, 1], [0, -1],
+];
+const _camDir = new THREE.Vector3();
+const _camRight = new THREE.Vector3();
+const _camUp = new THREE.Vector3();
+const _camWorldUp = new THREE.Vector3(0, 1, 0);
+const _camProbeOrigin = new THREE.Vector3();
+
+// Renvoie la distance libre (avant le premier obstacle) entre lookAt et
+// lookAt + dir*fullDist, en testant plusieurs rayons parallèles légèrement
+// décalés autour de l'axe central pour couvrir le "volume" de la caméra,
+// pas juste un point infiniment fin.
+function cameraFreeDistance(lookAt, dir, fullDist) {
+  if (!cameraObstacles.length) return fullDist;
+
+  _camRight.crossVectors(dir, _camWorldUp);
+  if (_camRight.lengthSq() < 1e-6) _camRight.set(1, 0, 0); else _camRight.normalize();
+  _camUp.crossVectors(_camRight, dir).normalize();
+
+  let minDist = fullDist;
+  for (const [rx, ry] of CAM_PROBE_OFFSETS) {
+    _camProbeOrigin.copy(lookAt)
+      .addScaledVector(_camRight, rx * CAM_PROBE_RADIUS_H)
+      .addScaledVector(_camUp, ry * CAM_PROBE_RADIUS_V);
+    camCollisionRay.set(_camProbeOrigin, dir);
+    camCollisionRay.far = fullDist;
+    const hits = camCollisionRay.intersectObjects(cameraObstacles, true);
+    if (hits.length && hits[0].distance < minDist) minDist = hits[0].distance;
+  }
+  return minDist;
+}
 
 let camDragging = false;
 let camLastX = 0, camLastY = 0;
@@ -8739,26 +8777,28 @@ function updateChaseCamera(delta) {
 
   const lookAt = new THREE.Vector3(catGroup.position.x, catGroup.position.y + CAM.lookHeight, catGroup.position.z);
 
-  // Collision caméra contre les bâtiments : on lance un rayon du point visé
-  // (le chat) vers la position voulue de la caméra. Si un mur/toit est
-  // touché avant, on rapproche la caméra juste devant l'obstacle — comme ça
-  // elle ne traverse jamais un bâtiment et on ne voit jamais à l'intérieur.
+  // Collision caméra contre les bâtiments : on teste plusieurs rayons du
+  // point visé (le chat) vers la position voulue de la caméra. Si un
+  // mur/toit est touché avant, on rapproche la caméra juste devant
+  // l'obstacle — comme ça elle ne traverse jamais un bâtiment et on ne voit
+  // jamais à l'intérieur, même en coupant un coin de mur ou un débord de toit.
   let finalDesired = desired;
-  const toCam = new THREE.Vector3().subVectors(desired, lookAt);
-  const fullDist = toCam.length();
-  if (fullDist > 0.0001 && cameraObstacles.length) {
-    const dir = toCam.clone().normalize();
-    camCollisionRay.set(lookAt, dir);
-    camCollisionRay.far = fullDist;
-    const hits = camCollisionRay.intersectObjects(cameraObstacles, true);
-    if (hits.length) {
-      const safeDist = Math.max(CAM_MIN_DIST_FROM_LOOK, hits[0].distance - CAM_COLLISION_MARGIN);
-      finalDesired = lookAt.clone().addScaledVector(dir, safeDist);
+  _camDir.subVectors(desired, lookAt);
+  const fullDist = _camDir.length();
+  if (fullDist > 0.0001) {
+    _camDir.normalize();
+    const freeDist = cameraFreeDistance(lookAt, _camDir, fullDist);
+    if (freeDist < fullDist) {
+      const safeDist = Math.max(CAM_MIN_DIST_FROM_LOOK, freeDist - CAM_COLLISION_MARGIN);
+      finalDesired = lookAt.clone().addScaledVector(_camDir, safeDist);
     }
   }
 
-  // Suivi lissé, indépendant du framerate.
-  const followSmoothing = 1 - Math.exp(-delta * 9);
+  // Suivi lissé, indépendant du framerate. En collision on suit un peu plus
+  // vite (moins de traînée) pour ne pas laisser la caméra "flotter" un
+  // instant à l'intérieur d'un mur pendant le lerp.
+  const collisionSmoothing = 1 - Math.exp(-delta * 16);
+  const followSmoothing = finalDesired !== desired ? collisionSmoothing : (1 - Math.exp(-delta * 9));
   camera.position.lerp(finalDesired, followSmoothing);
 
   camera.lookAt(lookAt);
@@ -8976,6 +9016,7 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
     if (o.isMesh) {
       o.castShadow = true;
       o.receiveShadow = true;
+      const isWalkable = !!(o.name && WALKABLE_NAME_RE.test(o.name));
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       mats.forEach((m) => {
         if (!m) return;
@@ -8985,9 +9026,14 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
           m.emissiveIntensity = 1.4;
           buildingEmissiveMats.push(m);
         }
+        // Double-face sur les murs/toits : sans ça, le rayon de collision de
+        // la caméra ne détecte pas les faces "arrière" et la caméra peut se
+        // retrouver coincée à l'intérieur de la géométrie (on voit alors le
+        // dessous d'un toit ou l'intérieur d'un mur en gros plan).
+        if (!isWalkable) m.side = THREE.DoubleSide;
         m.needsUpdate = true;
       });
-      if (o.name && WALKABLE_NAME_RE.test(o.name)) {
+      if (isWalkable) {
         walkableMeshes.push(o);
       } else {
         // Tout le reste (murs, façades, toits, piliers...) sert d'obstacle
