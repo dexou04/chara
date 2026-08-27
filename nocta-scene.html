@@ -8850,6 +8850,100 @@ const gridHelper = new THREE.GridHelper(30, 30, 0x2a3466, 0x141a33);
 gridHelper.position.y = 0.01;
 scene.add(gridHelper);
 
+/* ---------- Habillage des bords de map : le disque de sol (rayon 30)
+   s'arrêtait net sur du noir. On ajoute trois couches pour meubler le vide
+   autour, toutes réglées pour ne pas gêner les collisions ni le gameplay
+   (rien de tout ça n'est dans `collidables`). ---------- */
+
+// 1) Silhouettes lointaines (toits/montagnes en fondu) formant un anneau
+//    juste au-delà du bord du sol. Le brouillard de la scène les fait
+//    disparaître progressivement en fond, façon skyline nocturne.
+const skylineGroup = new THREE.Group();
+const skylineMat = new THREE.MeshBasicMaterial({ color: 0x0c1130 });
+const SKYLINE_RADIUS = 33;
+const SKYLINE_COUNT = 46;
+for (let i = 0; i < SKYLINE_COUNT; i++) {
+  const angle = (i / SKYLINE_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
+  const r = SKYLINE_RADIUS + (Math.random() - 0.5) * 6;
+  let mesh;
+  if (i % 2 === 0) {
+    // toits / immeubles lointains
+    const h = 4 + Math.random() * 9;
+    const w = 2.5 + Math.random() * 4;
+    mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 2.5), skylineMat);
+    mesh.position.y = h / 2 - 0.4;
+  } else {
+    // pics de montagne lointains, plus hauts et plus larges
+    const h = 8 + Math.random() * 14;
+    const rad = 5 + Math.random() * 5;
+    mesh = new THREE.Mesh(new THREE.ConeGeometry(rad, h, 5), skylineMat);
+    mesh.position.y = h / 2 - 0.4;
+  }
+  mesh.position.x = Math.sin(angle) * r;
+  mesh.position.z = Math.cos(angle) * r;
+  mesh.rotation.y = angle + Math.random() * 0.5;
+  skylineGroup.add(mesh);
+}
+scene.add(skylineGroup);
+
+// 2) Ciel étoilé + lune visible (sphère + halo). fog=false sur ces éléments
+//    pour qu'ils restent nets malgré la distance (le fog exponentiel de la
+//    scène les aurait sinon complètement noyés dans le noir).
+const starsGeo = new THREE.BufferGeometry();
+const STAR_COUNT = 700;
+const starPositions = new Float32Array(STAR_COUNT * 3);
+for (let i = 0; i < STAR_COUNT; i++) {
+  const r = 140 + Math.random() * 90;
+  const theta = Math.random() * Math.PI * 2;
+  const phi = Math.acos(Math.random() * 0.82); // concentre les étoiles vers le haut du ciel
+  starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+  starPositions[i * 3 + 1] = r * Math.cos(phi) + 25;
+  starPositions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+}
+starsGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+const starsMat = new THREE.PointsMaterial({
+  color: 0xcfe0ff, size: 0.7, sizeAttenuation: true,
+  transparent: true, opacity: 0.85, fog: false,
+});
+const stars = new THREE.Points(starsGeo, starsMat);
+scene.add(stars);
+
+const moonMesh = new THREE.Mesh(
+  new THREE.SphereGeometry(4, 24, 24),
+  new THREE.MeshBasicMaterial({ color: 0xe4eaff, fog: false })
+);
+moonMesh.position.set(-60, 68, -50);
+scene.add(moonMesh);
+
+const moonGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+  color: 0x98a7c6, transparent: true, opacity: 0.35, fog: false,
+}));
+moonGlow.scale.set(32, 32, 1);
+moonGlow.position.copy(moonMesh.position);
+scene.add(moonGlow);
+
+// 3) Lucioles flottantes : petits points lumineux qui dérivent doucement
+//    autour du bord du sol, pour que les alentours ne soient pas figés.
+const FIREFLY_COUNT = 70;
+const fireflyGeo = new THREE.BufferGeometry();
+const fireflyPos = new Float32Array(FIREFLY_COUNT * 3);
+const fireflyPhase = new Float32Array(FIREFLY_COUNT);
+for (let i = 0; i < FIREFLY_COUNT; i++) {
+  const angle = Math.random() * Math.PI * 2;
+  const r = 3 + Math.random() * 27;
+  fireflyPos[i * 3] = Math.sin(angle) * r;
+  fireflyPos[i * 3 + 1] = 0.3 + Math.random() * 3.5;
+  fireflyPos[i * 3 + 2] = Math.cos(angle) * r;
+  fireflyPhase[i] = Math.random() * Math.PI * 2;
+}
+fireflyGeo.setAttribute('position', new THREE.BufferAttribute(fireflyPos, 3));
+const fireflyMat = new THREE.PointsMaterial({
+  color: 0xaef0ff, size: 0.14, transparent: true, opacity: 0.9,
+  blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const fireflies = new THREE.Points(fireflyGeo, fireflyMat);
+scene.add(fireflies);
+
 /* ---------- Chargement / barre de progression ---------- */
 let toLoad = 2, loaded = 0; // cat + building
 const loadbar = document.getElementById('loadbar');
@@ -8869,6 +8963,21 @@ function showError(msg) {
 /* ---------- Animation registries ---------- */
 const animatables = [];
 const mouse = { x: 0, y: 0 };
+
+// Animation des lucioles flottantes (dérive douce + scintillement), enregistrée
+// ici car `animatables` n'existe qu'à partir de cette ligne.
+animatables.push({
+  update(t) {
+    const posAttr = fireflyGeo.attributes.position;
+    for (let i = 0; i < FIREFLY_COUNT; i++) {
+      const phase = fireflyPhase[i];
+      posAttr.array[i * 3 + 1] += Math.sin(t * 0.6 + phase) * 0.0015;
+      posAttr.array[i * 3] += Math.cos(t * 0.4 + phase) * 0.0015;
+    }
+    posAttr.needsUpdate = true;
+    fireflyMat.opacity = 0.55 + Math.sin(t * 2 + fireflyPhase[0]) * 0.3;
+  }
+});
 
 /* ---------- Load: CAT (glb, squelette animé — IdleNorm/WalkCycle/IdleTailSwoosh/SitDown/IdleSit/StandUp)
    Contrôlable au clavier en ZQSD (Z=avancer, S=reculer, Q=tourner à gauche,
