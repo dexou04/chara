@@ -1700,8 +1700,10 @@ function triggerZoneTransition(toZone, targetGroup, flashMaterial) {
   if (zoneTransition) return;
   const warm = toZone === 'gravity' || activeZone === 'gravity';
   const voidFlavor = toZone === 'void' || activeZone === 'void';
+  const morphFlavor = toZone === 'morph' || activeZone === 'morph';
   FLASH_OVERLAY().classList.toggle('warm', warm);
   FLASH_OVERLAY().classList.toggle('void', voidFlavor);
+  FLASH_OVERLAY().classList.toggle('morph', morphFlavor);
   zoneTransition = { toZone, targetGroup, flashMaterial, startTime: clock.getElapsedTime() };
 }
 
@@ -5019,6 +5021,9 @@ function updateHubHover() {
   if (microSymbol && microSymbol.visible) {
     targets.push(microSymbol);
   }
+  if (hubFissureGroup) {
+    targets.push(hubFissureHit);
+  }
 
   const intersects = raycaster.intersectObjects(targets, false);
   const ring = document.getElementById('cursor-ring');
@@ -5029,6 +5034,7 @@ function updateHubHover() {
   hoveredShard = false;
   hoveredPortal = false;
   hoveredMicroSymbol = false;
+  hoveredHubFissure = false;
 
   if (intersects.length > 0) {
     const obj = intersects[0].object;
@@ -5042,6 +5048,8 @@ function updateHubHover() {
       hoveredPortal = true;
     } else if (obj === microSymbol) {
       hoveredMicroSymbol = true;
+    } else if (obj === hubFissureHit) {
+      hoveredHubFissure = true;
     } else if (obj.parent && obj.parent.userData && obj.parent.userData.name) {
       hoveredOrbital = obj.parent;
     } else {
@@ -5257,6 +5265,8 @@ function handleClick(clientX, clientY) {
     triggerPortalTransition();
   } else if (hoveredMicroSymbol) {
     activateMicroSymbol();
+  } else if (hoveredHubFissure) {
+    enterMorphFromFissure();
   }
   registerFirstInteraction();
 }
