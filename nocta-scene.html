@@ -8883,11 +8883,11 @@ scene.add(gridHelper);
 //    disparaître progressivement en fond, façon skyline nocturne.
 const skylineGroup = new THREE.Group();
 const skylineMat = new THREE.MeshBasicMaterial({ color: 0x0c1130 });
-const SKYLINE_RADIUS = 33;
+const SKYLINE_RADIUS = 31;
 const SKYLINE_COUNT = 46;
 for (let i = 0; i < SKYLINE_COUNT; i++) {
   const angle = (i / SKYLINE_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
-  const r = SKYLINE_RADIUS + (Math.random() - 0.5) * 6;
+  const r = SKYLINE_RADIUS + (Math.random() - 0.5) * 2;
   let mesh;
   if (i % 2 === 0) {
     // toits / immeubles lointains
@@ -8916,9 +8916,9 @@ scene.add(skylineGroup);
 //    transition sol -> vide soit habillée avec du vrai décor. Purement
 //    visuel (pas ajouté à `collidables` ni `cameraObstacles`) : le chat reste
 //    cantonné au disque de sol / bâtiment de toute façon.
-const BORDER_RADIUS = 30;        // pile sur le bord du disque de sol (rayon 30)
-const BORDER_RADIUS_JITTER = 4;  // dispersion aléatoire autour de ce rayon
-const BORDER_COUNT_PER_ASSET = 16; // instances réparties sur 360° par asset
+const BORDER_RADIUS = 30.5;      // collé au bord du disque de sol (rayon 30)
+const BORDER_RADIUS_JITTER = 1.4; // faible dispersion : on reste "soudé" au bord
+const BORDER_COUNT_PER_ASSET = 26; // + d'instances, plus rapprochées = pas de trous
 const borderLoader = new THREE.GLTFLoader();
 (PATHS.borderGlbs || []).forEach((path, assetIndex) => {
   borderLoader.load(path, (gltf) => {
@@ -8936,7 +8936,7 @@ const borderLoader = new THREE.GLTFLoader();
     // l'échelle et pouvoir aligner le dessous de chaque rocher sur le sol.
     const box = new THREE.Box3().setFromObject(src);
     const size = new THREE.Vector3(); box.getSize(size);
-    const TARGET_SIZE = 3.4;
+    const TARGET_SIZE = 4.4;
     const baseScale = TARGET_SIZE / (Math.max(size.x, size.y, size.z) || 1);
     const minY = box.min.y;
 
