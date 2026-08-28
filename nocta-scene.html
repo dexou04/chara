@@ -8639,6 +8639,14 @@ version 0.6.9
 const PATHS = {
   catGlb:      'assets/tuxedo_cat_animated_2.0.glb',
   buildingGlb: 'assets/tanabata_evening.glb',
+  // Assets de bord de map : rochers côtiers ("rocky coast of the sea of
+  // japan", fragments Sketchfab) répartis tout autour du Tanabata. On pourra
+  // simplement ajouter des chemins à ce tableau au fur et à mesure que
+  // d'autres assets de bord arrivent — pas besoin de toucher au reste du code.
+  borderGlbs: [
+    'assets/rocky_coast_of_the_sea_of_japan_n6__fragment.glb',
+    'assets/rocky_coast_of_the_sea_of_japan_n9__fragment.glb',
+  ],
 };
 
 /* ---------- Scene / camera / renderer ---------- */
@@ -8900,6 +8908,61 @@ for (let i = 0; i < SKYLINE_COUNT; i++) {
   skylineGroup.add(mesh);
 }
 scene.add(skylineGroup);
+
+// 1bis) Bord immédiat : rochers côtiers (assets réels, PATHS.borderGlbs).
+//    La skyline ci-dessus reste une silhouette lointaine abstraite ; ici on
+//    charge de vrais modèles (rochers de bord de mer) et on les disperse en
+//    plusieurs exemplaires tout autour du bord du disque de sol, pour que la
+//    transition sol -> vide soit habillée avec du vrai décor. Purement
+//    visuel (pas ajouté à `collidables` ni `cameraObstacles`) : le chat reste
+//    cantonné au disque de sol / bâtiment de toute façon.
+const BORDER_RADIUS = 30;        // pile sur le bord du disque de sol (rayon 30)
+const BORDER_RADIUS_JITTER = 4;  // dispersion aléatoire autour de ce rayon
+const BORDER_COUNT_PER_ASSET = 16; // instances réparties sur 360° par asset
+const borderLoader = new THREE.GLTFLoader();
+(PATHS.borderGlbs || []).forEach((path, assetIndex) => {
+  borderLoader.load(path, (gltf) => {
+    const src = gltf.scene;
+    src.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        mats.forEach((m) => { if (m && m.map) m.map.encoding = THREE.sRGBEncoding; });
+      }
+    });
+
+    // Taille et hauteur de base (avant instanciation), pour normaliser
+    // l'échelle et pouvoir aligner le dessous de chaque rocher sur le sol.
+    const box = new THREE.Box3().setFromObject(src);
+    const size = new THREE.Vector3(); box.getSize(size);
+    const TARGET_SIZE = 3.4;
+    const baseScale = TARGET_SIZE / (Math.max(size.x, size.y, size.z) || 1);
+    const minY = box.min.y;
+
+    const count = BORDER_COUNT_PER_ASSET;
+    for (let i = 0; i < count; i++) {
+      const clone = src.clone(true);
+      const angle = ((i + assetIndex * 0.5) / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
+      const r = BORDER_RADIUS + (Math.random() - 0.5) * BORDER_RADIUS_JITTER;
+      const scaleVariation = 0.7 + Math.random() * 1.1;
+      const scale = baseScale * scaleVariation;
+      clone.scale.setScalar(scale);
+      // Enfonce légèrement chaque rocher dans le sol (aléatoire) pour un
+      // ancrage plus naturel, au lieu d'un alignement parfait qui a l'air posé.
+      const sink = Math.random() * 0.35;
+      clone.position.set(
+        Math.sin(angle) * r,
+        -minY * scale - sink,
+        Math.cos(angle) * r
+      );
+      clone.rotation.y = Math.random() * Math.PI * 2;
+      scene.add(clone);
+    }
+  }, undefined, (err) => {
+    console.warn('[bord de map] impossible de charger ' + path, err);
+  });
+});
 
 // 2) Ciel étoilé + lune visible (sphère + halo). fog=false sur ces éléments
 //    pour qu'ils restent nets malgré la distance (le fog exponentiel de la
