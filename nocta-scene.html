@@ -8932,13 +8932,15 @@ const borderLoader = new THREE.GLTFLoader();
       }
     });
 
-    // Taille et hauteur de base (avant instanciation), pour normaliser
-    // l'échelle et pouvoir aligner le dessous de chaque rocher sur le sol.
+    // Taille de base (avant instanciation), juste pour viser une échelle
+    // cohérente avec le reste de la scène. La hauteur d'ancrage, elle, sera
+    // recalculée par clone (voir plus bas) : ces fragments Sketchfab n'ont
+    // pas forcément un pivot centré, extrapoler la hauteur à partir de la
+    // bbox brute du modèle non transformé donnait des positions fausses.
     const box = new THREE.Box3().setFromObject(src);
     const size = new THREE.Vector3(); box.getSize(size);
     const TARGET_SIZE = 4.4;
     const baseScale = TARGET_SIZE / (Math.max(size.x, size.y, size.z) || 1);
-    const minY = box.min.y;
 
     const count = BORDER_COUNT_PER_ASSET;
     for (let i = 0; i < count; i++) {
@@ -8948,21 +8950,31 @@ const borderLoader = new THREE.GLTFLoader();
       const scaleVariation = 0.7 + Math.random() * 1.1;
       const scale = baseScale * scaleVariation;
       clone.scale.setScalar(scale);
+      clone.rotation.y = Math.random() * Math.PI * 2;
+
+      // Bbox recalculée sur le clone lui-même, une fois rotation + échelle
+      // appliquées (même technique que pour le bâtiment plus bas dans le
+      // fichier) : on centre le rocher sur (x, z) visé et on pose son point
+      // le plus bas exactement sur le sol, quel que soit son pivot d'origine.
+      const clonedBox = new THREE.Box3().setFromObject(clone);
+      const center = new THREE.Vector3(); clonedBox.getCenter(center);
       // Enfonce légèrement chaque rocher dans le sol (aléatoire) pour un
       // ancrage plus naturel, au lieu d'un alignement parfait qui a l'air posé.
       const sink = Math.random() * 0.35;
+      const targetX = Math.sin(angle) * r;
+      const targetZ = Math.cos(angle) * r;
       clone.position.set(
-        Math.sin(angle) * r,
-        -minY * scale - sink,
-        Math.cos(angle) * r
+        targetX - center.x,
+        -clonedBox.min.y - sink,
+        targetZ - center.z
       );
-      clone.rotation.y = Math.random() * Math.PI * 2;
       scene.add(clone);
     }
   }, undefined, (err) => {
     console.warn('[bord de map] impossible de charger ' + path, err);
   });
 });
+console.log('[bord de map] chargement de', (PATHS.borderGlbs || []).length, 'assets de bord lancé (rayon', BORDER_RADIUS, ')');
 
 // 2) Ciel étoilé + lune visible (sphère + halo). fog=false sur ces éléments
 //    pour qu'ils restent nets malgré la distance (le fog exponentiel de la
