@@ -8873,53 +8873,58 @@ const gridHelper = new THREE.GridHelper(30, 30, 0x2a3466, 0x141a33);
 gridHelper.position.y = 0.01;
 scene.add(gridHelper);
 
-/* ---------- Habillage des bords de map : le disque de sol (rayon 30)
-   s'arrêtait net sur du noir. On ajoute trois couches pour meubler le vide
-   autour, toutes réglées pour ne pas gêner les collisions ni le gameplay
-   (rien de tout ça n'est dans `collidables`). ---------- */
+/* ---------- Habillage des bords de map ----------
+   Auparavant calé sur le rayon du disque de sol (30 unités) — bien plus
+   grand que l'emprise réelle du Tanabata (bâtiment + pont + torii), du coup
+   la skyline et les rochers se retrouvaient très loin de la zone où on se
+   déplace, presque invisibles. On calcule maintenant le rayon réel du
+   Tanabata une fois son modèle chargé (voir plus bas, dans le loader du
+   bâtiment) et on appelle les deux fonctions ci-dessous avec ce rayon, pour
+   que le décor colle vraiment à ses bords. */
 
 // 1) Silhouettes lointaines (toits/montagnes en fondu) formant un anneau
-//    juste au-delà du bord du sol. Le brouillard de la scène les fait
-//    disparaître progressivement en fond, façon skyline nocturne.
-const skylineGroup = new THREE.Group();
-const skylineMat = new THREE.MeshBasicMaterial({ color: 0x0c1130 });
-const SKYLINE_RADIUS = 31;
-const SKYLINE_COUNT = 46;
-for (let i = 0; i < SKYLINE_COUNT; i++) {
-  const angle = (i / SKYLINE_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
-  const r = SKYLINE_RADIUS + (Math.random() - 0.5) * 2;
-  let mesh;
-  if (i % 2 === 0) {
-    // toits / immeubles lointains
-    const h = 4 + Math.random() * 9;
-    const w = 2.5 + Math.random() * 4;
-    mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 2.5), skylineMat);
-    mesh.position.y = h / 2 - 0.4;
-  } else {
-    // pics de montagne lointains, plus hauts et plus larges
-    const h = 8 + Math.random() * 14;
-    const rad = 5 + Math.random() * 5;
-    mesh = new THREE.Mesh(new THREE.ConeGeometry(rad, h, 5), skylineMat);
-    mesh.position.y = h / 2 - 0.4;
+//    juste au-delà du bord réel du Tanabata. Le brouillard de la scène les
+//    fait disparaître progressivement en fond, façon skyline nocturne.
+function spawnSkyline(centerRadius) {
+  const skylineGroup = new THREE.Group();
+  const skylineMat = new THREE.MeshBasicMaterial({ color: 0x0c1130 });
+  const SKYLINE_COUNT = 46;
+  for (let i = 0; i < SKYLINE_COUNT; i++) {
+    const angle = (i / SKYLINE_COUNT) * Math.PI * 2 + (Math.random() - 0.5) * 0.18;
+    const r = centerRadius + (Math.random() - 0.5) * 2;
+    let mesh;
+    if (i % 2 === 0) {
+      // toits / immeubles lointains
+      const h = 4 + Math.random() * 9;
+      const w = 2.5 + Math.random() * 4;
+      mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 2.5), skylineMat);
+      mesh.position.y = h / 2 - 0.4;
+    } else {
+      // pics de montagne lointains, plus hauts et plus larges
+      const h = 8 + Math.random() * 14;
+      const rad = 5 + Math.random() * 5;
+      mesh = new THREE.Mesh(new THREE.ConeGeometry(rad, h, 5), skylineMat);
+      mesh.position.y = h / 2 - 0.4;
+    }
+    mesh.position.x = Math.sin(angle) * r;
+    mesh.position.z = Math.cos(angle) * r;
+    mesh.rotation.y = angle + Math.random() * 0.5;
+    skylineGroup.add(mesh);
   }
-  mesh.position.x = Math.sin(angle) * r;
-  mesh.position.z = Math.cos(angle) * r;
-  mesh.rotation.y = angle + Math.random() * 0.5;
-  skylineGroup.add(mesh);
+  scene.add(skylineGroup);
 }
-scene.add(skylineGroup);
 
 // 1bis) Bord immédiat : rochers côtiers (assets réels, PATHS.borderGlbs).
 //    La skyline ci-dessus reste une silhouette lointaine abstraite ; ici on
 //    charge de vrais modèles (rochers de bord de mer) et on les disperse en
-//    plusieurs exemplaires tout autour du bord du disque de sol, pour que la
+//    plusieurs exemplaires tout autour du bord réel du Tanabata, pour que la
 //    transition sol -> vide soit habillée avec du vrai décor. Purement
 //    visuel (pas ajouté à `collidables` ni `cameraObstacles`) : le chat reste
 //    cantonné au disque de sol / bâtiment de toute façon.
-const BORDER_RADIUS = 30.5;      // collé au bord du disque de sol (rayon 30)
 const BORDER_RADIUS_JITTER = 1.4; // faible dispersion : on reste "soudé" au bord
 const BORDER_COUNT_PER_ASSET = 26; // + d'instances, plus rapprochées = pas de trous
 const borderLoader = new THREE.GLTFLoader();
+function spawnBorderAssets(centerRadius) {
 (PATHS.borderGlbs || []).forEach((path, assetIndex) => {
   borderLoader.load(path, (gltf) => {
     const src = gltf.scene;
@@ -8946,7 +8951,7 @@ const borderLoader = new THREE.GLTFLoader();
     for (let i = 0; i < count; i++) {
       const clone = src.clone(true);
       const angle = ((i + assetIndex * 0.5) / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.3;
-      const r = BORDER_RADIUS + (Math.random() - 0.5) * BORDER_RADIUS_JITTER;
+      const r = centerRadius + (Math.random() - 0.5) * BORDER_RADIUS_JITTER;
       const scaleVariation = 0.7 + Math.random() * 1.1;
       const scale = baseScale * scaleVariation;
       clone.scale.setScalar(scale);
@@ -8974,7 +8979,8 @@ const borderLoader = new THREE.GLTFLoader();
     console.warn('[bord de map] impossible de charger ' + path, err);
   });
 });
-console.log('[bord de map] chargement de', (PATHS.borderGlbs || []).length, 'assets de bord lancé (rayon', BORDER_RADIUS, ')');
+console.log('[bord de map] chargement de', (PATHS.borderGlbs || []).length, 'assets de bord lancé (rayon', centerRadius, ')');
+}
 
 // 2) Ciel étoilé + lune visible (sphère + halo). fog=false sur ces éléments
 //    pour qu'ils restent nets malgré la distance (le fog exponentiel de la
@@ -9298,6 +9304,17 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
   building.position.set(-center2.x, -min2.y, -center2.z);
   scene.add(building);
 
+  // Rayon réel du Tanabata (bâtiment + pont + torii, tout ce que contient ce
+  // glb) une fois centré à l'origine : demi-diagonale de son emprise au sol.
+  // La skyline et les rochers de bord sont calés dessus + une marge, pour
+  // qu'ils collent vraiment à ses bords au lieu d'être plaqués sur le rayon
+  // (bien plus grand) du disque de sol.
+  const size2 = new THREE.Vector3(); box2.getSize(size2);
+  const buildingRadius = Math.sqrt((size2.x / 2) ** 2 + (size2.z / 2) ** 2);
+  const BORDER_MARGIN = 2.5;
+  spawnSkyline(buildingRadius + BORDER_MARGIN + 1.5);
+  spawnBorderAssets(buildingRadius + BORDER_MARGIN);
+
   // Seuls les meshes "marchables" repérés ci-dessus entrent dans les collisions
   // du chat (le reste de la ville reste purement visuel).
   collidables.push(...walkableMeshes);
@@ -9313,7 +9330,14 @@ buildingLoader.load(PATHS.buildingGlb, (gltf) => {
   }
 
   bumpLoaded();
-}, undefined, (err) => { showError('Impossible de charger ' + PATHS.buildingGlb + ' — vérifie l\'arborescence de dossiers.'); bumpLoaded(); });
+}, undefined, (err) => {
+  showError('Impossible de charger ' + PATHS.buildingGlb + ' — vérifie l\'arborescence de dossiers.');
+  bumpLoaded();
+  // Filet de sécurité : si le Tanabata ne charge pas, on affiche quand même
+  // le décor de bord avec un rayon par défaut plutôt que rien du tout.
+  spawnSkyline(16);
+  spawnBorderAssets(13.5);
+});
 
 /* ---------- Interaction souris ---------- */
 window.addEventListener('pointermove', (e) => {
